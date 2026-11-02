@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.3.0
+// @version      0.4.0
 // @description  Aspire resort credit finder (Semi-Flex deposit rates) and cash vs. points comparison for Hilton searches
 // @author       sydev
 // @license      MIT
@@ -34,6 +34,8 @@
   const RATES_KEY = 'hilton-pro-tools-currency-rates';
   const VIEW_KEY = 'hilton-pro-tools-view';
   const TOOLS_KEY = 'hilton-pro-tools-tools';
+  const UPDATE_KEY = 'hilton-pro-tools-update';
+  const UPDATE_AUTO_KEY = 'hilton-pro-tools-update-auto';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -47,6 +49,29 @@
     resort: 'Scans Resort Credit hotels for Semi-Flex rates',
     points: 'Loads points prices and exchange rates'
   };
+
+  // Update check against the published script on GitHub.
+  const REPO_RAW = 'https://raw.githubusercontent.com/sydev/hilton-pro-tools/main/';
+  const UPDATE = {
+    meta: REPO_RAW + 'hilton-pro-tools.meta.js',
+    script: REPO_RAW + 'hilton-pro-tools.user.js',
+    notes: REPO_RAW + 'changelog.md',
+    changelog: 'https://github.com/sydev/hilton-pro-tools/blob/main/changelog.md',
+    startDelay: 3000,
+    // Automatic checks at most this often; failed ones are retried sooner.
+    everyHours: 6,
+    retryMinutes: 10,
+    maxNotes: 4
+  };
+
+  // Installed version as reported by the userscript manager.
+  const VERSION = (() => {
+    try {
+      return GM_info.script.version || null;
+    } catch {
+      return null;
+    }
+  })();
 
   const CONFIG = {
     maxHotels: 40,
@@ -91,7 +116,16 @@
     // Hotel names from Hilton's hotelSummaryOptions request, by code.
     names: new Map(),
     // Codes already sent in a points request this search.
-    extras: { points: new Set(), pending: 0, error: '' }
+    extras: { points: new Set(), pending: 0, error: '' },
+    // status: idle, checking, current, available or failed.
+    update: {
+      auto: true,
+      status: 'idle',
+      latest: null,
+      notes: null,
+      skipped: null,
+      installing: false
+    }
   };
 
   try {
@@ -102,6 +136,9 @@
 
     const currency = localStorage.getItem(CURRENCY_KEY);
     if (/^[A-Z]{3}$/.test(currency || '')) state.currency = currency;
+
+    state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
+    state.update.skipped = savedUpdate().skipped || null;
 
     const tools = JSON.parse(localStorage.getItem(TOOLS_KEY) || '{}');
 
@@ -1617,6 +1654,309 @@
   }
  
   // =====================================
+  // Update check
+  // =====================================
+
+  // Compares dotted version numbers: 1 if a is newer, -1 if older, else 0.
+  function compareVersions(a, b) {
+    const parts = value => String(value).replace(/^v/, '').split('.')
+      .map(part => parseInt(part, 10) || 0);
+
+    const x = parts(a);
+    const y = parts(b);
+
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const diff = (x[i] || 0) - (y[i] || 0);
+      if (diff) return diff > 0 ? 1 : -1;
+    }
+
+    return 0;
+  }
+
+  const isNewer = latest =>
+    Boolean(VERSION && latest && compareVersions(latest, VERSION) > 0);
+
+  function savedUpdate() {
+    try {
+      return JSON.parse(localStorage.getItem(UPDATE_KEY)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveUpdate(values) {
+    try {
+      localStorage.setItem(
+        UPDATE_KEY,
+        JSON.stringify({ ...savedUpdate(), ...values })
+      );
+    } catch {}
+  }
+
+  // Own request without cookies, so nothing of the Hilton session leaves the page.
+  async function fetchText(url) {
+    const response = await nativeFetch(url, {
+      cache: 'no-store',
+      credentials: 'omit',
+      signal: AbortSignal.timeout?.(10000)
+    });
+
+    if (!response.ok) throw Error(`HTTP ${response.status}`);
+
+    return response.text();
+  }
+
+  // Changelog entries between the installed and the latest version, by group
+  // (Added, Changed, Fixed). An entry is shortened to its bold lead-in.
+  function changelogNotes(markdown, latest) {
+    const groups = [];
+    let version = null;
+    let group = null;
+
+    for (const line of markdown.split(/\r?\n/)) {
+      const heading = /^##\s+v?(\d[\w.-]*)/.exec(line);
+
+      if (heading) {
+        version = heading[1];
+        group = null;
+        continue;
+      }
+
+      if (
+        !version ||
+        compareVersions(version, VERSION) <= 0 ||
+        compareVersions(version, latest) > 0
+      ) continue;
+
+      const title = /^###\s+(.+)/.exec(line);
+
+      if (title) {
+        const name = title[1].trim();
+
+        group = groups.find(item => item.title === name);
+        if (!group) groups.push(group = { title: name, items: [] });
+        continue;
+      }
+
+      const entry = /^[-*]\s+(.+)/.exec(line);
+      if (!entry || !group) continue;
+
+      const text = /^\*\*(.+?)\*\*/.exec(entry[1])?.[1] || entry[1];
+
+      group.items.push(
+        text
+          .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+          .replace(/[*`]/g, '')
+          .replace(/:$/, '')
+          .trim()
+      );
+    }
+
+    return groups.filter(item => item.items.length);
+  }
+
+  function applyLatest(latest, notes) {
+    const update = state.update;
+
+    update.latest = latest;
+    update.notes = notes || null;
+    update.status = isNewer(latest) ? 'available' : 'current';
+  }
+
+  // Reads the @version of the published header and, when it is newer,
+  // the matching changelog entries. Automatic checks reuse a recent result.
+  async function checkUpdate(manual = false) {
+    const update = state.update;
+
+    if (!VERSION || update.status === 'checking') return;
+
+    const saved = savedUpdate();
+    const wait = saved.failed
+      ? UPDATE.retryMinutes * 60000
+      : UPDATE.everyHours * 3600000;
+
+    if (!manual && saved.at && Date.now() - saved.at < wait) {
+      if (!saved.failed && saved.latest) {
+        applyLatest(saved.latest, saved.notes);
+        render();
+      }
+      return;
+    }
+
+    update.status = 'checking';
+    render();
+
+    try {
+      const latest = /^\/\/\s*@version\s+(\S+)/m.exec(
+        await fetchText(UPDATE.meta)
+      )?.[1];
+
+      if (!latest) throw Error('no @version in the published header');
+
+      let notes = null;
+
+      if (isNewer(latest)) {
+        try {
+          notes = changelogNotes(await fetchText(UPDATE.notes), latest);
+        } catch {}
+      }
+
+      applyLatest(latest, notes);
+      saveUpdate({ at: Date.now(), latest, notes, failed: false });
+
+    } catch (error) {
+      update.status = 'failed';
+      update.error = error.message;
+      saveUpdate({ at: Date.now(), failed: true });
+    }
+
+    render();
+  }
+
+  // Opens the published script; the userscript manager shows its install
+  // page in the new tab. This page reloads once the user comes back.
+  function installUpdate() {
+    window.open(UPDATE.script, '_blank', 'noopener');
+
+    if (!state.update.installing) {
+      state.update.installing = true;
+
+      let left = document.visibilityState === 'hidden';
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') left = true;
+        else if (left) location.reload();
+      });
+    }
+
+    render();
+  }
+
+  function skipUpdate() {
+    state.update.skipped = state.update.latest;
+    saveUpdate({ skipped: state.update.latest });
+    render();
+  }
+
+  function updateNotesHTML(notes) {
+    let shown = 0;
+    let rest = 0;
+
+    const groups = (notes || []).map(group => {
+      const items = group.items.slice(0, Math.max(0, UPDATE.maxNotes - shown));
+
+      shown += items.length;
+      rest += group.items.length - items.length;
+
+      return items.length
+        ? `
+          <div class="hpt-update-cat">${html(group.title)}</div>
+          <ul>${items.map(item => `<li>${html(item)}</li>`).join('')}</ul>
+        `
+        : '';
+    }).join('');
+
+    if (!shown) return '';
+
+    const more = rest
+      ? `
+        <a
+          class="hpt-update-more"
+          href="${html(UPDATE.changelog)}"
+          target="_blank"
+          rel="noopener"
+        >+ ${rest} more in the changelog ↗</a>
+      `
+      : '';
+
+    return `<div class="hpt-update-notes">${groups}${more}</div>`;
+  }
+
+  // Banner on the home page, the dot and badge when minimized and the
+  // version row in Settings.
+  function renderUpdate() {
+    const update = state.update;
+    const latest = update.latest;
+
+    const visible =
+      update.status === 'available' &&
+      (update.installing || latest !== update.skipped);
+
+    const banner = $('hpt-update');
+    const bannerKey = visible ? `${latest}|${update.installing}` : '';
+
+    banner.hidden = !visible;
+    $('hpt-logo').dataset.update = String(visible);
+    $('hpt-min-update').textContent = visible ? 'Update' : '';
+
+    if (banner.dataset.key !== bannerKey) {
+      banner.dataset.key = bannerKey;
+
+      const head = (title, text) => `
+        <div class="hpt-update-head">
+          <span class="hpt-update-icon">${ICON.upgrade}</span>
+          <span class="hpt-update-text">
+            <b>${html(title)}</b>
+            <span>${html(text)}</span>
+          </span>
+        </div>
+      `;
+
+      banner.innerHTML = !visible
+        ? ''
+        : update.installing
+          ? `
+            <div class="hpt-update" role="status">
+              ${head(
+                `Installing ${latest}`,
+                'Confirm the install in the new tab. This page reloads when you come back.'
+              )}
+              <div class="hpt-update-actions">
+                <button class="hpt-update-link" type="button" data-update="install">
+                  Open install page again
+                </button>
+              </div>
+            </div>
+          `
+          : `
+            <div class="hpt-update" role="status">
+              ${head('Update available', `Hilton Pro Tools ${VERSION} → ${latest}`)}
+              ${updateNotesHTML(update.notes)}
+              <div class="hpt-update-actions">
+                <button class="hpt-update-go" type="button" data-update="install">
+                  Install ${html(latest)}
+                </button>
+                <button class="hpt-update-link" type="button" data-update="skip">
+                  Skip this version
+                </button>
+              </div>
+            </div>
+          `;
+    }
+
+    const row = $('hpt-version-state');
+    const rowKey = `${update.status}|${latest}`;
+
+    $('hpt-update-auto').checked = update.auto;
+
+    if (row.dataset.key === rowKey) return;
+    row.dataset.key = rowKey;
+
+    const action = (name, label) =>
+      `<button class="hpt-link-btn" type="button" data-update="${name}">${label}</button>`;
+
+    row.innerHTML = !VERSION
+      ? 'Version unknown'
+      : {
+          idle: action('check', 'Check for updates'),
+          checking: '<span class="hpt-spin" aria-hidden="true"></span>Checking…',
+          current: `<span class="hpt-version-ok">${ICON.check}Up to date</span>${action('check', 'Check again')}`,
+          available: `<span class="hpt-version-new">${html(latest)} available</span>${action('install', 'Install')}`,
+          failed: `<span class="hpt-version-fail" title="${html(update.error)}">Check failed</span>${action('check', 'Retry')}`
+        }[update.status];
+  }
+
+  // =====================================
   // View rates link
   // =====================================
  
@@ -1698,6 +2038,7 @@
       flex: none;
     }
     .hpt-logo {
+      position: relative;
       width: 32px;
       height: 32px;
       border-radius: 9px;
@@ -1861,6 +2202,7 @@
       white-space: nowrap;
     }
     .hpt-badge.match { background: #dcfce7; color: #166534; }
+    .hpt-badge.update { background: #dbeafe; color: #1e40af; }
     .hpt-badge.partial { background: #fef3c7; color: #92400e; }
     .hpt-badge.unavail { background: #e2e8f0; color: #334155; }
     .hpt-bar { height: 4px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
@@ -2104,6 +2446,109 @@
     .hpt-acc-sum { flex: 1; min-width: 0; text-align: right; }
     .hpt-acc-body { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
     .hpt-shared { margin-top: 4px; display: flex; flex-direction: column; gap: 10px; }
+
+    /* Update check: banner on the home page and version row in Settings. */
+    .hpt-update-wrap { padding: 14px 14px 0; }
+    .hpt-update {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 12px;
+      color: #334155;
+    }
+    .hpt-update-head { display: flex; align-items: center; gap: 10px; }
+    .hpt-update-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: #1d4ed8;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .hpt-update-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; color: #475569; }
+    .hpt-update-text b { font-size: 13px; color: #1e3a8a; }
+    .hpt-update-notes { border-top: 1px solid #bfdbfe; padding-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+    .hpt-update-cat { font-size: 11px; font-weight: 600; color: #475569; margin-top: 4px; }
+    .hpt-update-cat:first-child { margin-top: 0; }
+    .hpt-update ul { margin: 0; padding-left: 16px; }
+    .hpt-update li { margin: 1px 0; line-height: 1.4; }
+    #hilton-pro-tools .hpt-update-more { margin-top: 4px; color: #1e40af; }
+    .hpt-update-actions { display: flex; align-items: center; gap: 8px; }
+    #hilton-pro-tools .hpt-update-go {
+      height: 36px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 9px;
+      background: #1d4ed8;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    #hilton-pro-tools .hpt-update-go:hover { background: #1e40af; }
+    #hilton-pro-tools .hpt-update-link {
+      min-height: 36px;
+      padding: 0 4px;
+      border: 0;
+      background: none;
+      color: #1e40af;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    #hilton-pro-tools .hpt-update-link:hover { text-decoration: underline; }
+    .hpt-update button:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+    #hilton-pro-tools.hpt-min .hpt-logo[data-update="true"]::after {
+      content: '';
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #1d4ed8;
+      box-shadow: 0 0 0 2px #fff;
+    }
+    .hpt-version {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      font-size: 12px;
+      color: #475569;
+    }
+    #hpt-version-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 28px; }
+    .hpt-version-ok { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: #166534; }
+    .hpt-version-new { font-weight: 600; color: #1e40af; }
+    #hilton-pro-tools .hpt-version-new + .hpt-link-btn { color: #1e40af; }
+    .hpt-version-fail { font-weight: 600; color: #b91c1c; }
+    .hpt-spin {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid #cbd5e1;
+      border-top-color: #0f766e;
+      animation: hpt-spin .8s linear infinite;
+      flex: none;
+    }
+    @media (prefers-reduced-motion: reduce) { .hpt-spin { animation: none; } }
+    #hilton-pro-tools .hpt-version-auto {
+      flex-basis: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0 0;
+      color: #334155;
+      cursor: pointer;
+    }
+    .hpt-version-auto input { margin: 0; width: 16px; height: 16px; accent-color: #0f766e; }
     .hpt-section {
       border-top: 1px solid #e2e8f0;
       padding: 12px 14px 14px;
@@ -2139,6 +2584,8 @@
     trash: svg(16, '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>'),
     back: svg(18, '<path d="m15 6-6 6 6 6"/>'),
     chevron: svg(16, '<path d="m9 6 6 6-6 6"/>', '#64748b'),
+    upgrade: svg(16, '<path d="M12 19V7"/><path d="m6 12 6-6 6 6"/>', 'currentColor', 2.2),
+    check: svg(14, '<path d="m5 12 5 5 9-10"/>', 'currentColor', 2.5),
     sliders: svg(16, '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>', '#475569'),
     resort: svg(20, '<path d="M12 3a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9z"/><path d="M12 12v7a2 2 0 0 0 4 0"/>'),
     points: svg(20, '<circle cx="9" cy="9" r="6"/><path d="M15.4 10.6A6 6 0 1 1 10.6 15.4"/>'),
@@ -2934,6 +3381,7 @@
     renderProgress();
     renderSettings();
     renderHome(eligible, matched);
+    renderUpdate();
     renderAll();
 
     const root = $('hpt-results');
@@ -3243,6 +3691,7 @@
         </div>
 
         <span id="hpt-min-badge" class="hpt-badge match hpt-min-badge"></span>
+        <span id="hpt-min-update" class="hpt-badge update hpt-min-badge"></span>
         <span id="hpt-min-progress" class="hpt-min-progress"></span>
 
         <button
@@ -3266,6 +3715,8 @@
 
       <div id="hpt-body">
         <div id="hpt-view-home">
+          <div id="hpt-update" class="hpt-update-wrap" hidden></div>
+
           <div id="hpt-home-empty"></div>
 
           <div id="hpt-tools" class="hpt-tools">
@@ -3363,6 +3814,17 @@
                     ></select>
                   </label>
                 </div>
+              </div>
+
+              <div class="hpt-version">
+                <span>Hilton Pro Tools ${html(VERSION || '')}</span>
+                <span aria-hidden="true">·</span>
+                <span id="hpt-version-state"></span>
+
+                <label class="hpt-version-auto">
+                  <input id="hpt-update-auto" type="checkbox">
+                  Check for updates automatically
+                </label>
               </div>
             </div>
           </details>
@@ -3467,6 +3929,27 @@
         showView(button.dataset.view);
       });
     });
+
+    panel.addEventListener('click', event => {
+      const action = event.target.closest('[data-update]')?.dataset.update;
+
+      if (action === 'check') checkUpdate(true);
+      if (action === 'install') installUpdate();
+      if (action === 'skip') skipUpdate();
+    });
+
+    $('hpt-update-auto').onchange = event => {
+      state.update.auto = event.target.checked;
+
+      try {
+        localStorage.setItem(
+          UPDATE_AUTO_KEY,
+          state.update.auto ? 'on' : 'off'
+        );
+      } catch {}
+
+      if (state.update.auto) checkUpdate();
+    };
 
     // Change on the Cash vs. Points page leads to the shared settings.
     $('hpt-all-change').addEventListener('click', () => {
@@ -3575,6 +4058,10 @@
     });
  
     render();
+
+    if (state.update.auto) {
+      setTimeout(() => checkUpdate(), UPDATE.startDelay);
+    }
   }
  
   if (document.readyState === 'loading') {

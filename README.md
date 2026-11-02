@@ -5,7 +5,7 @@ A userscript that adds a small panel to search results on [hilton.com](https://w
 - **Resort Finder:** finds **Semi-Flex** rates with a **deposit required** at hotels on Hilton's official [Resort Credit list](https://www.hilton.com/en/p/hilton-honors/resort-credit-eligible-hotels/), built for holders of the Hilton Honors American Express Aspire card.
 - **Cash vs. Points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
 
-Each tool can be turned off under **Settings** on the panel's home page; a tool that is off sends no requests. All requests go to hilton.com with your own session, never to other servers.
+Each tool can be turned off under **Settings** on the panel's home page; a tool that is off sends no requests. All tool requests go to hilton.com with your own session. The only other request is the update check, which reads the script header and `changelog.md` from this repository on GitHub without cookies; it can be turned off under **Settings**.
 
 See [info.md](info.md) for the full description and [changelog.md](changelog.md) for what changed in each version.
 
@@ -45,7 +45,9 @@ Then pin Tampermonkey to the toolbar (puzzle icon → pin) so you can see when i
 
 ### Updates
 
-Tampermonkey checks for new versions on its own (by default once a day). To check right away, click the Tampermonkey icon and choose **Check for userscript updates**.
+The panel looks for a new version a few seconds after a hilton.com page loads (at most every 6 hours) and shows **Update available** with what changed; **Install** opens the new version in Tampermonkey, and the Hilton tab reloads when you come back to it. You can also click **Check for updates** under **Settings**.
+
+Tampermonkey also updates the script on its own (by default once a day), or right away via the Tampermonkey icon → **Check for userscript updates**.
 
 ### Uninstall
 

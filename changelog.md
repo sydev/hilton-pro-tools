@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- **Update check:** a few seconds after a hilton.com page loads, the script compares its version with the one published on GitHub (at most every 6 hours). When there is a newer one, the home page shows *Update available* with the changelog entries since your version, **Install** and **Skip this version**. When minimized, a dot on the logo and an *Update* badge show it.
+- **Install** opens the new version in your userscript manager; the Hilton tab reloads once you come back to it.
+- **Version row in Settings:** the installed version, **Check for updates** (*Checking…*, *Up to date*, *X available*, *Check failed*) and *Check for updates automatically* to turn the automatic check off.
+
 ## 0.3.0
 
 ### Added

@@ -40,6 +40,8 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Settings** (collapsed by default, click to open):
   - **Tools:** turn each tool on or off. A tool that is off has no card and sends no requests to Hilton; turning it back on catches up on the current search.
   - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points is on.
+  - **Version:** the installed version and **Check for updates**. *Check for updates automatically* (on by default) looks for a new version a few seconds after a page loads, at most every 6 hours.
+- **Update available:** when a newer version is published, the home page shows what changed. **Install** opens it in your userscript manager and reloads the Hilton tab when you come back; **Skip this version** hides the notice until the next version.
 
 | Element | Function |
 |---|---|

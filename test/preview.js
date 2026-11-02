@@ -7,8 +7,9 @@
 // Set CHROMIUM_PATH to use an already installed Chromium instead of Playwright's own.
 // Prints the CSV header and one row, the requests sent and any page errors;
 // writes home-scanning.png, scanning.png, minimized-scanning.png, done-no-fx.png,
-// done.png, home.png, home-settings.png, all-hotels.png, minimized.png and
-// home-points-off.png into the output folder.
+// done.png, home.png, home-settings.png, all-hotels.png, minimized.png,
+// home-points-off.png, home-update.png, minimized-update.png and
+// home-installing.png into the output folder.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -16,6 +17,33 @@ const { chromium } = require('playwright');
 const [scriptPath = path.join(__dirname, '..', 'hilton-pro-tools.user.js'), outDir = path.join(__dirname, 'shots')] = process.argv.slice(2);
 fs.mkdirSync(outDir, { recursive: true });
 const userscript = fs.readFileSync(scriptPath, 'utf8');
+
+// Version in the script header; the GitHub mock publishes PUBLISHED.
+const VERSION = /@version\s+(\S+)/.exec(userscript)[1];
+const NEXT = VERSION.replace(/^(\d+)\.(\d+).*$/, (m, major, minor) => `${major}.${+minor + 1}.0`);
+let PUBLISHED = VERSION;
+
+const changelog = () => `# Changelog
+
+## ${NEXT}
+
+### Added
+
+- **First new feature:** what it does.
+- **Second new feature:** what it does.
+
+### Fixed
+
+- **First fix:** details.
+- **Second fix:** details.
+- **Third fix:** details.
+
+## ${VERSION}
+
+### Added
+
+- **Already installed:** not shown.
+`;
 
 const HOTELS = [
   { code: 'MLEAIHI', name: 'Hilton Maldives Amingiri Resort & Spa' },
@@ -181,7 +209,10 @@ function graphql(body) {
   const open = async setup => {
     const page = await browser.newPage({ viewport: { width: 420, height: 1500 }, deviceScaleFactor: 2 });
     page.on('pageerror', e => errors.push(e.message));
-    await page.route('https://www.hilton.com/**', mock);
+    await page.context().route('https://www.hilton.com/**', mock);
+    await page.context().route('https://raw.githubusercontent.com/**', github);
+    // Userscript managers provide GM_info even with @grant none.
+    await page.addInitScript(version => { window.GM_info = { script: { version } }; }, VERSION);
     if (setup) await page.addInitScript(setup);
     await page.addInitScript(userscript);
     await page.goto('https://www.hilton.com/en/search/?query=maldives&arrivalDate=2027-02-21&departureDate=2027-03-01');
@@ -196,6 +227,14 @@ function graphql(body) {
       return route.fulfill({ contentType: 'text/html', body: officialPage() });
     }
     return route.fulfill({ contentType: 'text/html', body: searchPage });
+  };
+  const github = route => {
+    const file = path.basename(new URL(route.request().url()).pathname);
+    LOG.push('github ' + file);
+    const body = file === 'changelog.md'
+      ? changelog()
+      : `// ==UserScript==\n// @name         Hilton Pro Tools\n// @version      ${PUBLISHED}\n// ==/UserScript==\n`;
+    return route.fulfill({ contentType: 'text/plain', body });
   };
 
   const page = await open();
@@ -260,6 +299,31 @@ function graphql(body) {
   await off.waitForTimeout(300);
   await off.locator('#hilton-pro-tools').screenshot({ path: path.join(outDir, 'home-points-off.png') });
   console.log('requests (points off):', LOG.filter(x => !x.startsWith('hotel_')));
+
+  // A newer version is published: banner, minimized badge, skip and install.
+  PUBLISHED = NEXT;
+  LOG.length = 0;
+  const upd = await open();
+  const updPanel = upd.locator('#hilton-pro-tools');
+  await upd.waitForSelector('#hpt-update:not([hidden])', { timeout: 15000 });
+  await updPanel.screenshot({ path: path.join(outDir, 'home-update.png') });
+  await upd.click('#hpt-min');
+  await updPanel.screenshot({ path: path.join(outDir, 'minimized-update.png') });
+  await upd.click('#hpt-min');
+  await upd.click('#hpt-update [data-update="skip"]');
+  console.log('after skip:', await upd.evaluate(() => [
+    document.querySelector('#hpt-update').hidden,
+    JSON.parse(localStorage.getItem('hilton-pro-tools-update')).skipped
+  ]));
+  await upd.click('#hpt-settings-acc > summary');
+  const [popup] = await Promise.all([
+    upd.waitForEvent('popup'),
+    upd.click('#hpt-version-state [data-update="install"]')
+  ]);
+  console.log('install opens:', popup.url());
+  await upd.waitForTimeout(300);
+  await updPanel.screenshot({ path: path.join(outDir, 'home-installing.png') });
+  console.log('requests (update):', LOG.filter(x => x.startsWith('github')));
 
   console.log('page errors:', errors.length ? errors : 'none');
   await browser.close();
