@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- **Turn tools on or off:** *Settings* on the home page has a switch per tool. A tool that is off has no card and sends no requests: without Resort Finder there is no resort list and no scan, without Cash vs. Points no points prices, exchange rates or points comparisons. Turning a tool back on catches up on the current search.
+- **Loading indicator on the home page:** a tool card shows a small spinner on its icon while that tool is still working (Resort Finder: list loading or scan running; Cash vs. Points: points prices or exchange rates loading).
+
+### Changed
+
+- **Settings accordion:** the tool switches and the shared settings (point value, currency) are in a collapsible *Settings* section at the bottom of the home page, closed by default; its header summarizes them. Point value and currency are only shown while Cash vs. Points is on. **Change** on the Cash vs. Points page opens it.
+
 ## 0.2.0
 
 ### Added

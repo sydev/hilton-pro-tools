@@ -6,8 +6,9 @@
 //
 // Set CHROMIUM_PATH to use an already installed Chromium instead of Playwright's own.
 // Prints the CSV header and one row, the requests sent and any page errors;
-// writes scanning.png, minimized-scanning.png, done-no-fx.png, done.png,
-// all-hotels.png and minimized.png into the output folder.
+// writes home-scanning.png, scanning.png, minimized-scanning.png, done-no-fx.png,
+// done.png, home.png, home-settings.png, all-hotels.png, minimized.png and
+// home-points-off.png into the output folder.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -176,11 +177,17 @@ function graphql(body) {
   const browser = await chromium.launch(
     process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}
   );
-  const page = await browser.newPage({ viewport: { width: 420, height: 1500 }, deviceScaleFactor: 2 });
   const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-
-  await page.route('https://www.hilton.com/**', route => {
+  const open = async setup => {
+    const page = await browser.newPage({ viewport: { width: 420, height: 1500 }, deviceScaleFactor: 2 });
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('https://www.hilton.com/**', mock);
+    if (setup) await page.addInitScript(setup);
+    await page.addInitScript(userscript);
+    await page.goto('https://www.hilton.com/en/search/?query=maldives&arrivalDate=2027-02-21&departureDate=2027-03-01');
+    return page;
+  };
+  const mock = route => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/graphql/customer')) {
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(graphql(JSON.parse(route.request().postData()))) });
@@ -189,10 +196,9 @@ function graphql(body) {
       return route.fulfill({ contentType: 'text/html', body: officialPage() });
     }
     return route.fulfill({ contentType: 'text/html', body: searchPage });
-  });
+  };
 
-  await page.addInitScript(userscript);
-  await page.goto('https://www.hilton.com/en/search/?query=maldives&arrivalDate=2027-02-21&departureDate=2027-03-01');
+  const page = await open();
 
   const panel = page.locator('#hilton-pro-tools');
   await page.waitForTimeout(10000);
@@ -206,16 +212,19 @@ function graphql(body) {
 
   await page.waitForFunction(() => !document.querySelector('#hpt-scan').disabled, null, { timeout: 60000 });
   await page.waitForTimeout(300);
-  await page.locator('#hilton-pro-tools details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
+  await page.locator('#hpt-results details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
   await panel.screenshot({ path: path.join(outDir, 'done-no-fx.png') });
 
   console.log('options:', await page.$$eval('#hpt-currency option', os => os.map(o => o.textContent.trim())));
   await page.waitForTimeout(200);
-  await page.locator('#hilton-pro-tools details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
+  await page.locator('#hpt-results details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
   await panel.screenshot({ path: path.join(outDir, 'done.png') });
 
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home.png') });
+  await page.click('#hpt-settings-acc > summary');
+  await page.waitForTimeout(300);
+  await panel.screenshot({ path: path.join(outDir, 'home-settings.png') });
   await page.selectOption('#hpt-currency', 'USD');
   await page.click('.hpt-tool[data-view="points"]');
   await page.waitForTimeout(100);
@@ -238,6 +247,20 @@ function graphql(body) {
 
   console.log('status:', await page.textContent('#hpt-status'));
   console.log('requests:', LOG.filter(x => !x.startsWith('hotel_')));
+
+  // Cash vs. Points switched off: no points or currency requests.
+  LOG.length = 0;
+  const off = await open(() => {
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false }));
+    localStorage.removeItem('hilton-pro-tools-view');
+  });
+  await off.waitForTimeout(6000);
+  await off.waitForFunction(() => !document.querySelector('#hpt-scan').disabled, null, { timeout: 60000 });
+  await off.click('#hpt-settings-acc > summary');
+  await off.waitForTimeout(300);
+  await off.locator('#hilton-pro-tools').screenshot({ path: path.join(outDir, 'home-points-off.png') });
+  console.log('requests (points off):', LOG.filter(x => !x.startsWith('hotel_')));
+
   console.log('page errors:', errors.length ? errors : 'none');
   await browser.close();
 })();

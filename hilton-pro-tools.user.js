@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.2.0
+// @version      0.3.0
 // @description  Aspire resort credit finder (Semi-Flex deposit rates) and cash vs. points comparison for Hilton searches
 // @author       sydev
 // @license      MIT
@@ -33,12 +33,19 @@
   const CURRENCY_KEY = 'hilton-pro-tools-currency';
   const RATES_KEY = 'hilton-pro-tools-currency-rates';
   const VIEW_KEY = 'hilton-pro-tools-view';
+  const TOOLS_KEY = 'hilton-pro-tools-tools';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
     home: 'Hilton Pro Tools',
     resort: 'Resort Finder',
     points: 'Cash vs. Points'
+  };
+
+  // Description of each tool in the home page's on/off switches.
+  const TOOL_INFO = {
+    resort: 'Scans Resort Credit hotels for Semi-Flex rates',
+    points: 'Loads points prices and exchange rates'
   };
 
   const CONFIG = {
@@ -66,6 +73,11 @@
     minimized: false,
     // Key of VIEWS shown in the panel.
     view: 'home',
+    // Tools switched on by the user; a tool that is off sends no requests.
+    tools: { resort: true, points: true },
+    // Captured search pages ({ codes, input }), to load points prices
+    // when Cash vs. Points is switched on later.
+    batches: [],
     pages: 0,
     autoScan: true,
     scan: null,
@@ -91,8 +103,16 @@
     const currency = localStorage.getItem(CURRENCY_KEY);
     if (/^[A-Z]{3}$/.test(currency || '')) state.currency = currency;
 
+    const tools = JSON.parse(localStorage.getItem(TOOLS_KEY) || '{}');
+
+    for (const tool of Object.keys(state.tools)) {
+      if (typeof tools?.[tool] === 'boolean') state.tools[tool] = tools[tool];
+    }
+
     const view = localStorage.getItem(VIEW_KEY);
-    if (Object.hasOwn(VIEWS, view)) state.view = view;
+    if (Object.hasOwn(VIEWS, view) && state.tools[view] !== false) {
+      state.view = view;
+    }
   } catch {}
  
   let autoTimer = null;
@@ -170,6 +190,7 @@
  
     state.search = null;
     state.pages = 0;
+    state.batches = [];
     state.extras = { points: new Set(), pending: 0, error: '' };
  
     render();
@@ -677,13 +698,17 @@
       }
  
       state.pages++;
+      state.batches.push({ codes, input });
 
-      loadPoints(codes, input, generation);
-      loadCurrencies();
+      if (state.tools.points) {
+        loadPoints(codes, input, generation);
+        loadCurrencies();
+      }
+
       render();
  
       if (added) {
-        status(
+        if (state.tools.resort) status(
           state.autoScan
             ? 'Hotel list captured, preparing auto scan…'
             : 'Hotel list captured; click Quick scan to start'
@@ -1377,6 +1402,7 @@
     clearTimeout(autoTimer);
  
     if (
+      !state.tools.resort ||
       !state.autoScan ||
       state.paused ||
       !state.search ||
@@ -1388,6 +1414,7 @@
     autoTimer = setTimeout(() => {
       if (
         generation !== state.generation ||
+        !state.tools.resort ||
         !state.autoScan ||
         state.paused
       ) return;
@@ -1403,6 +1430,8 @@
  
   async function runScan(manual = false) {
     syncLocation();
+
+    if (!state.tools.resort) return;
  
     if (state.busy) {
       if (manual) {
@@ -2017,12 +2046,64 @@
       align-items: center;
       justify-content: center;
       flex: none;
+      position: relative;
     }
     .hpt-tool-icon.points { background: #dbeafe; color: #1e40af; }
+    /* Spinner badge on the icon while the tool is still loading. */
+    .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
+      content: '';
+      position: absolute;
+      right: -5px;
+      bottom: -5px;
+      width: 12px;
+      height: 12px;
+      box-sizing: content-box;
+      border-radius: 50%;
+      border: 2px solid #cbd5e1;
+      border-top-color: currentColor;
+      background: #fff;
+      box-shadow: 0 0 0 2px #fff;
+      animation: hpt-spin .8s linear infinite;
+    }
+    @keyframes hpt-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
+        animation: hpt-pulse 1s ease-in-out infinite alternate;
+      }
+    }
     .hpt-tool-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
     .hpt-tool-text b { font-size: 14px; font-weight: 650; }
     .hpt-tool-sub { font-size: 12px; color: #475569; overflow-wrap: anywhere; }
     .hpt-tool .hpt-badge:empty, .hpt-tool .hpt-chip:empty { display: none; }
+    .hpt-tool-icon.small { width: 28px; height: 28px; border-radius: 8px; }
+    .hpt-tool-icon.small svg { width: 16px; height: 16px; }
+    .hpt-tool-icon.off { background: #f1f5f9; color: #64748b; }
+    .hpt-tool-switch { justify-content: flex-start; }
+    .hpt-tool-switch .hpt-tool-text { gap: 1px; font-size: 11px; color: #475569; }
+    .hpt-tool-switch .hpt-tool-text b { font-size: 13px; font-weight: 600; color: #0f172a; }
+    /* Settings accordion on the home page, closed on load. */
+    .hpt-acc { border-top: 1px solid #e2e8f0; }
+    .hpt-acc > summary {
+      list-style: none;
+      min-height: 44px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #475569;
+    }
+    .hpt-acc > summary::-webkit-details-marker { display: none; }
+    .hpt-acc > summary:hover { background: #f8fafc; }
+    .hpt-acc > summary:focus-visible { outline: 2px solid #0f766e; outline-offset: -2px; }
+    .hpt-acc > summary b { font-size: 13px; font-weight: 600; color: #0f172a; }
+    .hpt-acc > summary svg { flex: none; }
+    .hpt-acc > summary > svg:last-child { transition: transform .15s; }
+    .hpt-acc[open] > summary > svg:last-child { transform: rotate(90deg); }
+    .hpt-acc-sum { flex: 1; min-width: 0; text-align: right; }
+    .hpt-acc-body { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .hpt-shared { margin-top: 4px; display: flex; flex-direction: column; gap: 10px; }
     .hpt-section {
       border-top: 1px solid #e2e8f0;
       padding: 12px 14px 14px;
@@ -2058,6 +2139,7 @@
     trash: svg(16, '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>'),
     back: svg(18, '<path d="m15 6-6 6 6 6"/>'),
     chevron: svg(16, '<path d="m9 6 6 6-6 6"/>', '#64748b'),
+    sliders: svg(16, '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>', '#475569'),
     resort: svg(20, '<path d="M12 3a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9z"/><path d="M12 12v7a2 2 0 0 0 4 0"/>'),
     points: svg(20, '<circle cx="9" cy="9" r="6"/><path d="M15.4 10.6A6 6 0 1 1 10.6 15.4"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
@@ -2367,6 +2449,8 @@
 
   // Semi-Flex rate of a scanned resort against its points price.
   function compare(entry, rate) {
+    if (!state.tools.points) return null;
+
     const perNight = state.hotels.get(entry.code)?.points;
     if (!perNight) return null;
 
@@ -2643,6 +2727,42 @@
 
     $('hpt-home-empty').innerHTML = s ? '' : EMPTY;
 
+    for (const tool of Object.keys(state.tools)) {
+      const on = state.tools[tool];
+
+      const input = state.panel.querySelector(`[data-tool="${tool}"]`);
+
+      state.panel.querySelector(`.hpt-tool[data-view="${tool}"]`).hidden = !on;
+      input.checked = on;
+      input.closest('label')
+        .querySelector('.hpt-tool-icon')
+        .classList.toggle('off', !on);
+      $(`hpt-${tool}-state`).textContent = on
+        ? TOOL_INFO[tool]
+        : 'Off · sends no requests';
+    }
+
+    const on = Object.values(state.tools).filter(Boolean).length;
+    const total = Object.keys(state.tools).length;
+
+    $('hpt-tools').hidden = !on;
+    // Point value and currency only matter for points comparisons.
+    $('hpt-shared').hidden = !state.tools.points;
+
+    $('hpt-settings-sum').textContent = state.tools.points
+      ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
+        `${state.pointValue} ct · ${state.currency}`
+      : `${on} of ${total} tools on`;
+
+    // Each tool card shows a spinner while that tool is still loading.
+    state.panel.querySelector('.hpt-tool[data-view="resort"]')
+      .setAttribute('aria-busy', String(Boolean(s && state.busy)));
+
+    state.panel.querySelector('.hpt-tool[data-view="points"]')
+      .setAttribute('aria-busy', String(Boolean(
+        s && (state.extras.pending > 0 || state.currencies?.size === 0)
+      )));
+
     $('hpt-resort-chip').textContent = matched
       ? `${matched} ${plural(matched, 'match', 'matches')}`
       : '';
@@ -2679,7 +2799,7 @@
             ? `${rows.length} ${plural(rows.length, 'hotel', 'hotels')} · no points prices`
             : 'Waiting for hotels';
 
-    const top = topFind();
+    const top = state.tools.resort && topFind();
 
     $('hpt-top').hidden = !top;
     if (!top) return;
@@ -2720,6 +2840,36 @@
     $('hpt-logo').hidden = !home && !state.minimized;
     $('hpt-title').textContent =
       VIEWS[state.minimized ? 'home' : state.view];
+  }
+
+  // Switches a tool on or off. Off stops its requests; on catches up
+  // on the current search.
+  function setTool(tool, on) {
+    state.tools[tool] = on;
+
+    try {
+      localStorage.setItem(TOOLS_KEY, JSON.stringify(state.tools));
+    } catch {}
+
+    if (tool === 'resort') {
+      if (on) {
+        state.paused = false;
+        scheduleAutoScan();
+      } else {
+        clearTimeout(autoTimer);
+        state.stop = true;
+      }
+    }
+
+    if (tool === 'points' && on && state.search) {
+      for (const batch of state.batches) {
+        loadPoints(batch.codes, batch.input, state.generation);
+      }
+
+      loadCurrencies();
+    }
+
+    render();
   }
 
   function showView(view) {
@@ -3118,7 +3268,7 @@
         <div id="hpt-view-home">
           <div id="hpt-home-empty"></div>
 
-          <div class="hpt-tools">
+          <div id="hpt-tools" class="hpt-tools">
             <button class="hpt-tool" type="button" data-view="resort">
               <span class="hpt-tool-icon">${ICON.resort}</span>
               <span class="hpt-tool-text">
@@ -3149,30 +3299,73 @@
             <div id="hpt-top-card" class="hpt-best hpt-top"></div>
           </div>
 
-          <div class="hpt-section">
-            <div class="hpt-section-title">Shared settings</div>
+          <details id="hpt-settings-acc" class="hpt-acc">
+            <summary>
+              ${ICON.sliders}
+              <b>Settings</b>
+              <span id="hpt-settings-sum" class="hpt-acc-sum"></span>
+              ${ICON.chevron}
+            </summary>
 
-            <div class="hpt-settings">
-              <label>
-                Point value
+            <div class="hpt-acc-body">
+              <div class="hpt-section-title">Tools</div>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small">${ICON.resort}</span>
+                <span class="hpt-tool-text">
+                  <b>Resort Finder</b>
+                  <span id="hpt-resort-state"></span>
+                </span>
                 <input
-                  id="hpt-point"
-                  type="text"
-                  inputmode="decimal"
-                  aria-label="Point value in euro cents"
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="resort"
+                  aria-label="Resort Finder"
                 >
-                ct
               </label>
 
-              <label>
-                Show in
-                <select
-                  id="hpt-currency"
-                  aria-label="Currency for prices and point values"
-                ></select>
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small points">${ICON.points}</span>
+                <span class="hpt-tool-text">
+                  <b>Cash vs. Points</b>
+                  <span id="hpt-points-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="points"
+                  aria-label="Cash vs. Points"
+                >
               </label>
+
+              <div id="hpt-shared" class="hpt-shared">
+                <div class="hpt-section-title">Shared settings</div>
+
+                <div class="hpt-settings">
+                  <label>
+                    Point value
+                    <input
+                      id="hpt-point"
+                      type="text"
+                      inputmode="decimal"
+                      aria-label="Point value in euro cents"
+                    >
+                    ct
+                  </label>
+
+                  <label>
+                    Show in
+                    <select
+                      id="hpt-currency"
+                      aria-label="Currency for prices and point values"
+                    ></select>
+                  </label>
+                </div>
+              </div>
             </div>
-          </div>
+          </details>
         </div>
 
         <div id="hpt-view-resort" hidden>
@@ -3275,7 +3468,17 @@
       });
     });
 
+    // Change on the Cash vs. Points page leads to the shared settings.
+    $('hpt-all-change').addEventListener('click', () => {
+      $('hpt-settings-acc').open = true;
+      $('hpt-point').focus();
+    });
+
     $('hpt-auto').checked = state.autoScan;
+
+    panel.querySelectorAll('[data-tool]').forEach(input => {
+      input.onchange = () => setTool(input.dataset.tool, input.checked);
+    });
 
     $('hpt-point').onchange = saveSettings;
     $('hpt-currency').onchange = saveSettings;

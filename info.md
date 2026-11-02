@@ -12,7 +12,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 1. Install the script and open <https://www.hilton.com>.
 2. Search for a destination and dates as usual (for example "Maldives").
 3. The **Hilton Pro Tools** panel appears in the top right. As soon as the search results load, the script reads the hotel list and starts the scan automatically (you can turn this off).
-4. The panel opens on its home page: one card per tool with a live summary, the top find and the shared settings. Click a card to open the tool; **‹** takes you back.
+4. The panel opens on its home page: one card per tool with a live summary, the top find and the collapsed **Settings** (tool switches, shared settings). Click a card to open the tool; **‹** takes you back.
 5. **Resort Finder** shows the scan progress, an estimated time left and the queue of hotels, then each eligible resort with its cheapest matching rate. **View rates ↗** opens the room selection on Hilton for that hotel and your dates.
 6. **Cash vs. Points** lists every hotel of the search and shows whether paying with points or cash is cheaper.
 
@@ -36,7 +36,10 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Resort Finder** card: how many hotels are eligible for the Resort Credit, how many were checked or can be retried, *Scanning hotel X of Y* during a scan, and *N matches* once something was found.
 - **Cash vs. Points** card: how often points win (for example *Points 4/6*) and the best value per point.
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
-- **Shared settings:** used by both tools.
+- **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
+- **Settings** (collapsed by default, click to open):
+  - **Tools:** turn each tool on or off. A tool that is off has no card and sends no requests to Hilton; turning it back on catches up on the current search.
+  - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points is on.
 
 | Element | Function |
 |---|---|

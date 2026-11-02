@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.2.0
+// @version      0.3.0
 // @description  Aspire resort credit finder (Semi-Flex deposit rates) and cash vs. points comparison for Hilton searches
 // @author       sydev
 // @license      MIT

@@ -18,7 +18,7 @@ There is no build step, linter or bundler. The file is **plain JavaScript**: it 
 
 ## Panel design
 
-The panel design lives in a private Claude Design canvas: https://claude.ai/artifact/MWT4zQt917AVHKoYsVEUgm. Its only board, "Hilton Pro Tools 0.2.0 · Home + tool pages" (`T3-Home.dc.html`), mirrors the current panel: the home page with one card per tool, the Resort Finder page and the Cash vs. Points page. Read the canvas and its comments before changing it, and carry agreed design changes over into `mount()`, `render()` and `STYLE`.
+The panel design lives in a private Claude Design canvas: https://claude.ai/artifact/MWT4zQt917AVHKoYsVEUgm. Its only board, "Hilton Pro Tools 0.3.0 · Home + tool pages" (`T3-Home.dc.html`), mirrors the current panel: the home page with one card per tool, the home page while tools are still loading, the home page with the Settings accordion open and a tool turned off, the Resort Finder page and the Cash vs. Points page. Read the canvas and its comments before changing it, and carry agreed design changes over into `mount()`, `render()` and `STYLE`.
 
 ## Running the preview
 
@@ -29,7 +29,7 @@ pnpm install && pnpm exec playwright install chromium
 pnpm test   # = node test/preview.js [hilton-pro-tools.user.js] [test/shots]
 ```
 
-Set `CHROMIUM_PATH` to use an existing Chromium. It prints the CSV header plus one row, the requests sent and any page errors, and writes into `test/shots/` (gitignored) `home-scanning.png`, `scanning.png`, `minimized-scanning.png`, `done-no-fx.png`, `done.png`, `home.png`, `all-hotels.png` and `minimized.png`. Mocks (hotels, cash/points prices, the official resort list page) live at the top of `test/preview.js`; `graphql(body)` there answers each `/graphql/customer` request, so new GraphQL queries in the script need a matching mock branch. This is the only verification available — run it and look at the screenshots after UI or scan-logic changes.
+Set `CHROMIUM_PATH` to use an existing Chromium. It prints the CSV header plus one row, the requests sent and any page errors, and writes into `test/shots/` (gitignored) `home-scanning.png`, `scanning.png`, `minimized-scanning.png`, `done-no-fx.png`, `done.png`, `home.png`, `home-settings.png`, `all-hotels.png`, `minimized.png` and `home-points-off.png` (a second run with Cash vs. Points off; its requests are printed separately). Mocks (hotels, cash/points prices, the official resort list page) live at the top of `test/preview.js`; `graphql(body)` there answers each `/graphql/customer` request, so new GraphQL queries in the script need a matching mock branch. This is the only verification available — run it and look at the screenshots after UI or scan-logic changes.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ The script is organized into sections marked by `// ====` banner comments. The f
 3. **Resort list.** `loadResorts()` fetches the official eligible-hotels page, extracts hotel codes from links, and caches them in `localStorage` for `CONFIG.cacheDays`.
 4. **Scanning.** `scheduleAutoScan()` → `runScan()` iterates eligible hotels; `scanHotel()` → `discoverRooms()` (room types, cheapest first) → per-room rate GraphQL via `post()`/`ask()` → `extractRates()` applies the match rules. Quick mode stops at a hotel's first match; `expandHotel()` does the full scan. `needsRetry()` decides what "Quick scan" retries. Throttling and caps are in `CONFIG` (`delay`, `maxHotels`, `maxRooms`) — keep the script gentle on Hilton.
 5. **Points & currencies.** `loadPoints()` re-issues the search asking only for points prices (what Hilton's "Use Points" toggle would do), one request per results page. `loadCurrencies()` caches Hilton's converter factors (relative to USD) for 12 h; `convert()`/`valuation()` compute value per point in euro cents against the user's `pointValue`.
-6. **UI.** `mount()` builds one page per key of `VIEWS` (`#hpt-view-home`, `#hpt-view-resort`, `#hpt-view-points`); `state.view` picks the visible one, `showView()` switches and persists it, `renderView()` updates the header. A new tool needs a `VIEWS` entry, a page, a card on the home page and its summary in `renderHome()`. `render()` refreshes everything from `state` (scoped styles, `hpt-` CSS prefix, panel can be dragged/collapsed via `mount()`); `renderProgress()` handles the scan progress/ETA/queue; `exportCSV()` writes `hilton_pro_tools.csv`.
+6. **UI.** `mount()` builds one page per key of `VIEWS` (`#hpt-view-home`, `#hpt-view-resort`, `#hpt-view-points`); `state.view` picks the visible one, `showView()` switches and persists it, `renderView()` updates the header. A new tool needs a `VIEWS` entry, a `state.tools` and `TOOL_INFO` entry, a page, a card and a switch in the home page's Settings accordion, its summary in `renderHome()`, and a `state.tools` guard on every request it sends. `render()` refreshes everything from `state` (scoped styles, `hpt-` CSS prefix, panel can be dragged/collapsed via `mount()`); `renderProgress()` handles the scan progress/ETA/queue; `exportCSV()` writes `hilton_pro_tools.csv`.
 
 ## Conventions
 
