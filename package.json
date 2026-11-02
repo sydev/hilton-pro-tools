@@ -1,0 +1,19 @@
+{
+  "name": "hilton-pro-tools",
+  "version": "0.1.2",
+  "description": "",
+  "main": "hilton-pro-tools.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node test/preview.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
+}

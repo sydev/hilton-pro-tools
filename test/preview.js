@@ -1,0 +1,243 @@
+// Runs the userscript against mocked hilton.com responses and screenshots the panel.
+//
+// Usage:
+//   pnpm install && pnpm exec playwright install chromium
+//   node test/preview.js [hilton-pro-tools.js] [test/shots]
+//
+// Set CHROMIUM_PATH to use an already installed Chromium instead of Playwright's own.
+// Prints the CSV header and one row, the requests sent and any page errors;
+// writes scanning.png, minimized-scanning.png, done-no-fx.png, done.png,
+// all-hotels.png and minimized.png into the output folder.
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require('playwright');
+
+const [scriptPath = path.join(__dirname, '..', 'hilton-pro-tools.js'), outDir = path.join(__dirname, 'shots')] = process.argv.slice(2);
+fs.mkdirSync(outDir, { recursive: true });
+const userscript = fs.readFileSync(scriptPath, 'utf8');
+
+const HOTELS = [
+  { code: 'MLEAIHI', name: 'Hilton Maldives Amingiri Resort & Spa' },
+  { code: 'MLEGSQQ', name: 'SAii Lagoon Maldives, Curio Collection by Hilton' },
+  { code: 'MLEHICI', name: 'Conrad Maldives Rangali Island' },
+  { code: 'MLEONWA', name: 'Waldorf Astoria Maldives Ithaafushi' }
+];
+
+const officialPage = () => {
+  const links = HOTELS.map(h => `<a href="/en/hotels/${h.code.toLowerCase()}-x/">${h.name}</a>`);
+  for (let i = 0; i < 60; i++) links.push(`<a href="/en/hotels/zzz${i}-x/">Filler ${i}</a>`);
+  return `<html><body><main>${links.join('')}</main></body></html>`;
+};
+
+const OTHERS = [
+  { code: 'MLEKAHI', name: 'Hilton Kanuhura (non-resort test)', cash: 3900, points: 70000 },
+  { code: 'MLECICI', name: 'Canopy Male', cash: 1450, points: 60000 },
+  { code: 'MLEHXHX', name: 'Hampton Hulhumale', cash: 980, points: null },
+  { code: 'MLEXXXX', name: 'Closed Hotel', closed: true },
+  { code: 'MLEDTDT', name: 'DoubleTree Male', cash: 1200, points: 52000 }
+];
+const CASH = { MLEAIHI: 21000, MLEGSQQ: 15800, MLEHICI: 22400, MLEONWA: 30500 };
+
+const searchPage = `<!doctype html><html><body style="margin:0;height:900px;background:#cfe3ea">
+<script>
+fetch('/graphql/customer?op=shop', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationName: 'shopMultiPropAvail',
+    query: 'query shopMultiPropAvail { shopMultiPropAvail { summary { lowest { amountAfterTax(currencyCode: "USD") } } } }',
+    variables: {
+      ctyhocns: ${JSON.stringify(HOTELS.map(h => h.code).concat(OTHERS.map(h => h.code)))},
+      input: { arrivalDate: '2027-02-21', departureDate: '2027-03-01', numAdults: 2, specialRates: { hhonors: false } }
+    }
+  })
+});
+fetch('/graphql/customer?op=summary', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ operationName: 'hotelSummaryOptions', query: 'query hotelSummaryOptions { x }', variables: {} })
+});
+</script></body></html>`;
+
+const LOG = [];
+
+const rooms = {
+  MLEAIHI: ['KNG', 'VIL'],
+  MLEGSQQ: ['STD', 'DLX', 'STE'],
+  MLEHICI: ['BCH', 'WTR'],
+  MLEONWA: []
+};
+
+const rate = (code, name, amount, deposit) => ({
+  roomTypeCode: 'x',
+  ratePlanCode: code,
+  rateAmount: amount,
+  // Stay total for 8 nights incl. ~17% tax, like Hilton's amountAfterTaxFmt.
+  amountAfterTaxFmt: '$' + (amount * 8 * 1.17).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  ratePlan: { ratePlanCode: code, ratePlanName: name, ratePlanDesc: '', advancePurchase: false },
+  guarantee: {
+    depositRequired: deposit,
+    nonRefundable: false,
+    cxlPolicyDesc: 'Free cancellation until 7 days before arrival'
+  },
+  hhonorsDiscountRate: null
+});
+
+const POINTS = { MLEHICI: 120000, MLEAIHI: 95000, MLEGSQQ: 80000 };
+
+function graphql(body) {
+  LOG.push(body.operationName + (body.variables?.input?.specialRates?.hhonors ? ' (points)' : ''));
+
+  if (body.operationName === 'hotelSummaryOptions') {
+    return { data: { hotelSummaryOptions: { hotels: HOTELS.concat(OTHERS).map(h => ({ ctyhocn: h.code, name: h.name })) } } };
+  }
+
+  if (body.operationName === 'currencies') {
+    // conversionFactor as units per USD.
+    return { data: { currencies: [
+      { currencyCode: 'EUR', conversionFactor: 0.92, description: 'Euro' },
+      { currencyCode: 'GBP', conversionFactor: 0.79, description: 'British Pound' },
+      { currencyCode: 'JPY', conversionFactor: 150, description: 'Japanese Yen' },
+      { currencyCode: 'USD', conversionFactor: 1, description: 'US Dollar' }
+    ] } };
+  }
+
+  if (/shopMultiPropAvail/.test(body.operationName || '')) {
+    const points = body.variables.input.specialRates?.hhonors;
+    return {
+      data: {
+        shopMultiPropAvail: body.variables.ctyhocns.map(code => {
+          const other = OTHERS.find(h => h.code === code);
+          if (other?.closed) return { ctyhocn: code, statusCode: 51, statusMessage: 'Hotel no longer a hilton', summary: { lowest: null, hhonors: null } };
+          const perNight = other ? other.points : POINTS[code];
+          return {
+            ctyhocn: code,
+            statusCode: 0,
+            currencyCode: 'MVR',
+            lengthOfStay: 8,
+            summary: points
+              ? { hhonors: perNight ? { dailyRmPointsRate: perNight, ratePlan: { ratePlanName: 'Standard Room Reward' } } : null }
+              : { lowest: { amountAfterTax: other ? other.cash : CASH[code], ratePlan: { ratePlanName: 'Honors Discount' } } }
+          };
+        })
+      }
+    };
+  }
+
+  const v = body.variables;
+  const code = v.ctyhocn;
+
+  if (code === 'MLEONWA' || !rooms[code]) {
+    return { data: { hotel: { ctyhocn: code, shopAvail: { statusCode: 1740, roomTypes: [] } } } };
+  }
+
+  if (!v.selectedRoomTypeCode) {
+    return {
+      data: {
+        hotel: {
+          ctyhocn: code,
+          shopAvail: {
+            statusCode: 0,
+            roomTypes: rooms[code].map((r, i) => ({
+              roomTypeCode: r,
+              roomTypeName: `${r} Villa`,
+              quickBookRate: { rateAmount: 1000 + i * 500, ratePlanCode: 'BAR' }
+            }))
+          }
+        }
+      }
+    };
+  }
+
+  const room = v.selectedRoomTypeCode;
+
+  if (code === 'MLEGSQQ' && room === 'DLX') {
+    return { errors: [{ message: 'HTTP 429 Too Many Requests' }] };
+  }
+
+  const rates = code === 'MLEHICI'
+    ? [rate('SFX1', 'Semi Flex Rate', 2480, true), rate('SFX2', 'Semi Flex Breakfast', 2790, true), rate('BAR', 'Best Available', 2300, false)]
+    : [rate('BAR', 'Best Available', 1500, false)];
+
+  return {
+    data: {
+      hotel: {
+        ctyhocn: code,
+        shopAvail: {
+          statusCode: 0,
+          roomTypes: [{ roomTypeCode: room, roomTypeName: `${room} Villa`, roomOnlyRates: rates }]
+        }
+      }
+    }
+  };
+}
+
+(async () => {
+  const browser = await chromium.launch(
+    process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}
+  );
+  const page = await browser.newPage({ viewport: { width: 420, height: 1500 }, deviceScaleFactor: 2 });
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+
+  await page.route('https://www.hilton.com/**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.startsWith('/graphql/customer')) {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(graphql(JSON.parse(route.request().postData()))) });
+    }
+    if (url.pathname.includes('resort-credit-eligible-hotels')) {
+      return route.fulfill({ contentType: 'text/html', body: officialPage() });
+    }
+    return route.fulfill({ contentType: 'text/html', body: searchPage });
+  });
+
+  await page.addInitScript(userscript);
+  await page.goto('https://www.hilton.com/en/search/?query=maldives&arrivalDate=2027-02-21&departureDate=2027-03-01');
+
+  const panel = page.locator('#hilton-pro-tools');
+  await page.waitForTimeout(10000);
+  await panel.screenshot({ path: path.join(outDir, 'home-scanning.png') });
+  await page.click('.hpt-tool[data-view="resort"]');
+  await panel.screenshot({ path: path.join(outDir, 'scanning.png') });
+
+  await page.click('#hpt-min');
+  await panel.screenshot({ path: path.join(outDir, 'minimized-scanning.png') });
+  await page.click('#hpt-min');
+
+  await page.waitForFunction(() => !document.querySelector('#hpt-scan').disabled, null, { timeout: 60000 });
+  await page.waitForTimeout(300);
+  await page.locator('#hilton-pro-tools details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
+  await panel.screenshot({ path: path.join(outDir, 'done-no-fx.png') });
+
+  console.log('options:', await page.$$eval('#hpt-currency option', os => os.map(o => o.textContent.trim())));
+  await page.waitForTimeout(200);
+  await page.locator('#hilton-pro-tools details').evaluateAll(ds => ds.forEach(d => { d.open = true; }));
+  await panel.screenshot({ path: path.join(outDir, 'done.png') });
+
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home.png') });
+  await page.selectOption('#hpt-currency', 'USD');
+  await page.click('.hpt-tool[data-view="points"]');
+  await page.waitForTimeout(100);
+  console.log('USD row:', (await page.textContent('#hpt-all-list .hpt-all-row')).replace(/\s+/g, ' ').trim());
+  await page.click('#hpt-all-change');
+  await page.selectOption('#hpt-currency', 'EUR');
+  await page.click('.hpt-tool[data-view="points"]');
+  await page.waitForTimeout(100);
+  await page.locator('#hpt-view-points').screenshot({ path: path.join(outDir, 'all-hotels.png') });
+  await page.evaluate(() => { document.querySelector('#hpt-body').scrollTop = 0; });
+
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
+  const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
+  console.log(csv[0]);
+  console.log(csv.find(line => line.includes('MLEHICI')));
+  console.log('stored:', await page.evaluate(() => [localStorage.getItem('hilton-pro-tools-point-value'), localStorage.getItem('hilton-pro-tools-currency')]));
+
+  await page.click('#hpt-min');
+  await panel.screenshot({ path: path.join(outDir, 'minimized.png') });
+
+  console.log('status:', await page.textContent('#hpt-status'));
+  console.log('requests:', LOG.filter(x => !x.startsWith('hotel_')));
+  console.log('page errors:', errors.length ? errors : 'none');
+  await browser.close();
+})();
