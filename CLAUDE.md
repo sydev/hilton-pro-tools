@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single userscript, `hilton-pro-tools.js` (Tampermonkey/Violentmonkey, `@match https://www.hilton.com/*`, `@run-at document-start`, `@grant none`). It adds a panel to hilton.com search results with two tools: an Aspire **resort credit finder** (Semi-Flex, deposit-required, refundable, non-Advance-Purchase rates at hotels on Hilton's official Resort Credit list) and a **cash vs. points** comparison.
+A single userscript, `hilton-pro-tools.user.js` (Tampermonkey/Violentmonkey, `@match https://www.hilton.com/*`, `@run-at document-start`, `@grant none`). It adds a panel to hilton.com search results with two tools: an Aspire **resort credit finder** (Semi-Flex, deposit-required, refundable, non-Advance-Purchase rates at hotels on Hilton's official Resort Credit list) and a **cash vs. points** comparison.
 
 There is no build step, linter or bundler. The file is **plain JavaScript**: it is installed as-is and the preview harness injects it verbatim with `page.addInitScript`. `package.json` exists only for the preview harness (Playwright as a dev dependency, `pnpm test`).
 
 ## Files
 
-- `hilton-pro-tools.js` — the whole script, one IIFE.
+- `hilton-pro-tools.user.js` — the whole script, one IIFE.
+- `hilton-pro-tools.meta.js` — a copy of the userscript header only. `@updateURL` points here so update checks fetch just the header; `@downloadURL` points at `hilton-pro-tools.user.js`. Keep it identical to the header in `hilton-pro-tools.user.js` (especially `@version`).
 - `info.md` — user-facing description (published script page). Keep it in sync when behaviour, UI labels, settings or limits change.
 - `changelog.md` — per-version changes, newest first, grouped as Added / Changed / Fixed. Bump `@version` in the userscript header together with a new changelog entry.
 - `test/preview.js` — Playwright harness that runs the script against mocked hilton.com responses and screenshots the panel.
@@ -25,7 +26,7 @@ Playwright is a dev dependency; its browser is downloaded separately once:
 
 ```sh
 pnpm install && pnpm exec playwright install chromium
-pnpm test   # = node test/preview.js [hilton-pro-tools.js] [test/shots]
+pnpm test   # = node test/preview.js [hilton-pro-tools.user.js] [test/shots]
 ```
 
 Set `CHROMIUM_PATH` to use an existing Chromium. It prints the CSV header plus one row, the requests sent and any page errors, and writes into `test/shots/` (gitignored) `home-scanning.png`, `scanning.png`, `minimized-scanning.png`, `done-no-fx.png`, `done.png`, `home.png`, `all-hotels.png` and `minimized.png`. Mocks (hotels, cash/points prices, the official resort list page) live at the top of `test/preview.js`; `graphql(body)` there answers each `/graphql/customer` request, so new GraphQL queries in the script need a matching mock branch. This is the only verification available — run it and look at the screenshots after UI or scan-logic changes.

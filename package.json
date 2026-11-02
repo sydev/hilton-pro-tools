@@ -2,7 +2,7 @@
   "name": "hilton-pro-tools",
   "version": "0.1.2",
   "description": "",
-  "main": "hilton-pro-tools.js",
+  "main": "hilton-pro-tools.user.js",
   "directories": {
     "test": "test"
   },

@@ -2,7 +2,7 @@
 //
 // Usage:
 //   pnpm install && pnpm exec playwright install chromium
-//   node test/preview.js [hilton-pro-tools.js] [test/shots]
+//   node test/preview.js [hilton-pro-tools.user.js] [test/shots]
 //
 // Set CHROMIUM_PATH to use an already installed Chromium instead of Playwright's own.
 // Prints the CSV header and one row, the requests sent and any page errors;
@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const [scriptPath = path.join(__dirname, '..', 'hilton-pro-tools.js'), outDir = path.join(__dirname, 'shots')] = process.argv.slice(2);
+const [scriptPath = path.join(__dirname, '..', 'hilton-pro-tools.user.js'), outDir = path.join(__dirname, 'shots')] = process.argv.slice(2);
 fs.mkdirSync(outDir, { recursive: true });
 const userscript = fs.readFileSync(scriptPath, 'utf8');
 
