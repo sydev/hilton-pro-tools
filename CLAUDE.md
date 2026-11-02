@@ -12,6 +12,7 @@ There is no build step, linter or bundler. The file is **plain JavaScript**: it 
 
 - `hilton-pro-tools.user.js` — the whole script, one IIFE.
 - `hilton-pro-tools.meta.js` — a copy of the userscript header only. `@updateURL` points here so update checks fetch just the header; `@downloadURL` points at `hilton-pro-tools.user.js`. Keep it identical to the header in `hilton-pro-tools.user.js` (especially `@version`).
+- `README.md` — repo landing page: short overview, installing Tampermonkey and the script, development. Keep install links and the tool summary in sync with the header and `info.md`.
 - `info.md` — user-facing description (published script page). Keep it in sync when behaviour, UI labels, settings or limits change.
 - `changelog.md` — per-version changes, newest first, grouped as Added / Changed / Fixed. Bump `@version` in the userscript header together with a new changelog entry.
 - `test/preview.js` — Playwright harness that runs the script against mocked hilton.com responses and screenshots the panel.
