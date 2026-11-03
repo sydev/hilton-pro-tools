@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **Split Stay:** a fourth tool that finds the cheapest mix of cash nights, points nights and Free Night Certificates for your stay. **Load nightly prices** prices every night on its own (one cash and one points request per night and results page; the page says how many before you start), then shows the cheapest plan per hotel as legs with their dates, cost and **Book ↗**. In each reward booking the cheapest of every 5 Standard Room Reward nights counts as free; certificates only go on Standard Room Reward nights.
+- **Change hotels once:** when moving to another hotel partway through saves at least 10 % over the best single hotel, that plan is shown first.
+- **Certificates:** how many Free Night Certificates the Split Stay may use (0–5, saved). Changing it recalculates without new requests.
+- **Split Stay card and switch:** the home card shows the cheapest stay and how much it saves against paying all cash or all points; Settings has its on/off switch. It works for stays of 2 to 14 nights and sends nothing until you click **Load nightly prices**.
+
 ## 0.5.0
 
 ### Added

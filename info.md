@@ -1,10 +1,11 @@
 # Hilton Pro Tools
 
-Three tools for a normal search on hilton.com, in one small panel:
+Four tools for a normal search on hilton.com, in one small panel:
 
 - **Resort credit finder:** finds **Semi-Flex** rates with a **deposit required** at hotels that are eligible for the **Resort Credit**.
 - **Cash vs. points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
 - **Free night finder:** shows where a **Free Night Certificate** can be used (a **Standard Room Reward** is available for your dates) and where it is worth the most.
+- **Split stay:** finds the cheapest mix of **cash nights, points nights and Free Night Certificates** for your stay, also with one hotel change.
 
 The resort credit finder is built for holders of the Hilton Honors American Express Aspire card. The resort credit only applies at certain resorts and only to charges that are actually posted. Finding a matching rate by hand means opening every resort, every room type and every rate plan. This script does that for you.
 
@@ -17,6 +18,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 5. **Resort Finder** shows the scan progress, an estimated time left and the queue of hotels, then each eligible resort with its cheapest matching rate. **View rates ↗** opens the room selection on Hilton for that hotel and your dates.
 6. **Cash vs. Points** lists every hotel of the search and shows whether paying with points or cash is cheaper.
 7. **Free Night Finder** ranks the hotels where a Free Night Certificate can be used by what one night is worth.
+8. **Split Stay** prices every night of the stay on demand and shows the cheapest mix of cash, points and certificates.
 
 ## What counts as a match?
 
@@ -38,11 +40,12 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Resort Finder** card: how many hotels are eligible for the Resort Credit, how many were checked or can be retried, *Scanning hotel X of Y* during a scan, and *N matches* once something was found.
 - **Cash vs. Points** card: how often points win (for example *Points 4/6*) and the best value per point.
 - **Free Night Finder** card: how many hotels are usable for a certificate (for example *5 usable*) and the best value (for example *Best: ≈ €2,576 a night at …*).
+- **Split Stay** card: before loading, how many requests it would send; afterwards the cheapest stay (for example *Best: ≈ €1,067 · 6 cash · 2 points*) and what it saves (for example *−€313*).
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
 - **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
 - **Settings** (collapsed by default, click to open):
   - **Tools:** turn each tool on or off. A tool that is off has no card and sends no requests to Hilton; turning it back on catches up on the current search.
-  - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points or Free Night Finder is on. Both tools share the same points request.
+  - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points, Free Night Finder or Split Stay is on. Cash vs. Points and Free Night Finder share the same points request.
   - **Version:** the installed version and **Check for updates**. *Check for updates automatically* (on by default) looks for a new version a few seconds after a page loads, at most every 6 hours.
 - **Update available:** when a newer version is published, the home page shows what changed. **Install** opens it in your userscript manager and reloads the Hilton tab when you come back; **Skip this version** hides the notice until the next version.
 
@@ -107,6 +110,24 @@ A Free Night Certificate (for example from the Aspire card) covers one night of 
 
 The finder uses Hilton's lowest points price for the whole stay. A single certificate night can still differ, so check it on Hilton before booking.
 
+## Split stay
+
+On longer stays, mixing is often cheapest: cash on cheap weeknights, points on expensive weekend nights, a Free Night Certificate on the priciest Standard Room Reward night, or a move to another hotel for the last nights. The **Split Stay** page works this out:
+
+- **Certificates:** how many Free Night Certificates to use (0–5, saved). Changing it recalculates right away.
+- **Load nightly prices:** asks Hilton for the cash and points price of every single night of the stay, for all hotels of the search: two requests per night and results page (the page shows the number and the time it takes, for example *16 requests, about 1 min*). Nothing is sent before you click it. It works for stays of 2 to 14 nights.
+- **Two tiles:** the cheapest stay and what it saves against the cheapest stay paid all cash or all points.
+- **Change hotels once:** if staying at one hotel first and another one afterwards saves at least 10 % over the best single hotel, that plan comes first.
+- **Best hotel:** the cheapest plan at one hotel, split into legs (*Cash*, *Points*, *Certificate*) with dates, nights, cost and **Book ↗** for exactly those dates (points and certificate legs open the reward rates).
+- **Other hotels:** their cheapest plan; click one to see its legs.
+
+How it counts:
+
+- Cash is the cheapest one-night rate after tax; points are the lowest reward price of that night, valued at your point value.
+- In each reward booking, the cheapest of every 5 Standard Room Reward nights is free (Silver and up). Premium Room Reward nights get no free night.
+- A certificate covers one Standard Room Reward night and is booked on its own.
+- Every leg is a separate reservation. One-night prices can differ from a longer stay's rates, so check each leg on Hilton before booking.
+
 ## How it works
 
 - **Read only:** The script observes Hilton's search requests (`/graphql/customer`) to get the hotel list and your search settings (dates, guests, rooms, currency). Hilton's responses are never modified.
@@ -114,6 +135,7 @@ The finder uses Hilton's lowest points price for the whole stay. A single certif
 - **Quick mode:** A hotel's scan stops at the first match. A full scan of every room type runs only when you click **Scan N more room types**.
 - **Gentle on the site:** About 0.85 s between requests, at most 40 eligible hotels per search and 25 room types per hotel.
 - **Points prices:** Hilton's search only returns points prices when you switch on "Use Points". The script requests them itself, once per page of search results, while Cash vs. Points or Free Night Finder is on. The rate plan name tells a Standard from a Premium Room Reward.
+- **Nightly prices:** Split Stay asks for cash and points prices one night at a time, only when you click **Load nightly prices**, with the same pause between requests as the scan.
 - **Hotel names and exchange rates** come from Hilton's own map request and currency converter. The exchange rates are cached for 12 hours.
 - **New destination:** If you change the destination or dates, results are discarded and the page reloads once so the new search is captured cleanly.
 
@@ -121,7 +143,7 @@ The finder uses Hilton's lowest points price for the whole stay. A single certif
 
 - `@grant none`, runs on `www.hilton.com` only.
 - **No external servers.** All requests go to hilton.com only, using your existing browser session.
-- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking).
+- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates).
 - In the CSV export, cells that start with `=`, `+`, `-` or `@` get a leading `'`, so Excel and other spreadsheet apps don't run them as formulas.
 
 ## Notes and limitations

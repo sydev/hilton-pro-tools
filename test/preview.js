@@ -8,7 +8,8 @@
 // Prints the CSV header and one row, the requests sent and any page errors;
 // writes home-scanning.png, scanning.png, minimized-scanning.png, done-no-fx.png,
 // done.png, home.png, home-settings.png, all-hotels.png, free-nights.png,
-// free-nights-points.png, minimized.png, home-points-off.png, home-update.png,
+// free-nights-points.png, split-idle.png, split-loading.png, split.png,
+// split-certificate.png, home-split.png, minimized.png, home-points-off.png, home-update.png,
 // minimized-update.png and home-installing.png into the output folder.
 const fs = require('fs');
 const path = require('path');
@@ -114,8 +115,20 @@ const rate = (code, name, amount, deposit) => ({
 
 const POINTS = { MLEHICI: 120000, MLEAIHI: 95000, MLEGSQQ: 80000 };
 
+// One-night prices for Split Stay, per night from Feb 21 (USD; null = sold out). Hotels not
+// listed cost a flat 1/8 of their stay price. DoubleTree is sold out the last two nights,
+// so DoubleTree then Canopy beats the cheapest single hotel.
+const NIGHTLY = {
+  MLEDTDT: { cash: [80, 80, 90, 150, 320, 340, null, null], points: [52000, 52000, 52000, 52000, 52000, 52000, null, null] },
+  MLECICI: { cash: [120, 120, 130, 180, 300, 320, 200, 130], points: Array(8).fill(60000) },
+  MLEHXHX: { cash: [100, 100, 110, 160, 420, 450, 160, 110], points: Array(8).fill(null) }
+};
+const nightOf = input => (Date.parse(input.arrivalDate) - Date.parse('2027-02-21')) / 86400000;
+const oneNight = input => Date.parse(input.departureDate) - Date.parse(input.arrivalDate) === 86400000;
+
 function graphql(body) {
-  LOG.push(body.operationName + (body.variables?.input?.specialRates?.hhonors ? ' (points)' : ''));
+  const input = body.variables?.input;
+  LOG.push(body.operationName + (input?.specialRates?.hhonors ? ' (points)' : '') + (input && oneNight(input) ? ' night' : ''));
 
   if (body.operationName === 'hotelSummaryOptions') {
     return { data: { hotelSummaryOptions: { hotels: HOTELS.concat(OTHERS).map(h => ({ ctyhocn: h.code, name: h.name })) } } };
@@ -138,7 +151,13 @@ function graphql(body) {
         shopMultiPropAvail: body.variables.ctyhocns.map(code => {
           const other = OTHERS.find(h => h.code === code);
           if (other?.closed) return { ctyhocn: code, statusCode: 51, statusMessage: 'Hotel no longer a hilton', summary: { lowest: null, hhonors: null } };
-          const perNight = other ? other.points : POINTS[code];
+          let perNight = other ? other.points : POINTS[code];
+          let cash = other ? other.cash : CASH[code];
+          if (oneNight(body.variables.input)) {
+            const day = nightOf(body.variables.input);
+            perNight = NIGHTLY[code] ? NIGHTLY[code].points[day] : perNight;
+            cash = NIGHTLY[code] ? NIGHTLY[code].cash[day] : cash && Math.round(cash / 8);
+          }
           return {
             ctyhocn: code,
             statusCode: 0,
@@ -146,7 +165,7 @@ function graphql(body) {
             lengthOfStay: 8,
             summary: points
               ? { hhonors: perNight ? { dailyRmPointsRate: perNight, ratePlan: { ratePlanName: other?.premium ? 'Premium Room Rewards' : 'Standard Room Reward' } } : null }
-              : { lowest: { amountAfterTax: other ? other.cash : CASH[code], ratePlan: { ratePlanName: 'Honors Discount' } } }
+              : { lowest: cash ? { amountAfterTax: cash, ratePlan: { ratePlanName: 'Honors Discount' } } : null }
           };
         })
       }
@@ -285,6 +304,23 @@ function graphql(body) {
   await page.click('[data-free-sort="cash"]');
   await page.click('#hpt-back');
 
+  // Split Stay: nothing is requested until Load nightly prices.
+  await page.click('.hpt-tool[data-view="split"]');
+  await page.locator('#hpt-view-split').screenshot({ path: path.join(outDir, 'split-idle.png') });
+  await page.click('#hpt-split-load');
+  await page.waitForTimeout(3000);
+  await page.locator('#hpt-view-split').screenshot({ path: path.join(outDir, 'split-loading.png') });
+  await page.waitForFunction(() => !document.querySelector('#hpt-split-load').disabled, null, { timeout: 60000 });
+  await page.locator('#hpt-view-split').screenshot({ path: path.join(outDir, 'split.png') });
+  console.log('split:', (await page.textContent('#hpt-split .hpt-split-card')).replace(/\s+/g, ' ').trim());
+  console.log('split leg link:', await page.getAttribute('#hpt-split .hpt-leg a', 'href'));
+  await page.selectOption('#hpt-certs', '1');
+  await page.locator('#hpt-view-split').screenshot({ path: path.join(outDir, 'split-certificate.png') });
+  console.log('split (1 certificate):', (await page.textContent('#hpt-split .hpt-split-card')).replace(/\s+/g, ' ').trim());
+  await page.selectOption('#hpt-certs', '0');
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-split.png') });
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -300,7 +336,7 @@ function graphql(body) {
   // Cash vs. Points and Free Night Finder switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.5.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison and Free Night Certificate finder for Hilton searches
+// @version      0.6.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder and split stay optimizer for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -37,20 +37,23 @@
   const UPDATE_KEY = 'hilton-pro-tools-update';
   const UPDATE_AUTO_KEY = 'hilton-pro-tools-update-auto';
   const FREE_SORT_KEY = 'hilton-pro-tools-free-sort';
+  const SPLIT_CERTS_KEY = 'hilton-pro-tools-split-certificates';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
     home: 'Hilton Pro Tools',
     resort: 'Resort Finder',
     points: 'Cash vs. Points',
-    free: 'Free Night Finder'
+    free: 'Free Night Finder',
+    split: 'Split Stay'
   };
 
   // Description of each tool in the home page's on/off switches.
   const TOOL_INFO = {
     resort: 'Scans Resort Credit hotels for Semi-Flex rates',
     points: 'Loads points prices and exchange rates',
-    free: 'Finds Standard Room Rewards for Free Night Certificates'
+    free: 'Finds Standard Room Rewards for Free Night Certificates',
+    split: 'Mixes cash, points and certificates night by night'
   };
 
   // Update check against the published script on GitHub.
@@ -83,6 +86,15 @@
     autoDelay: 4500,
     cacheDays: 30
   };
+
+  // Split Stay loads one-night prices on demand: two requests per night and results page.
+  const SPLIT = {
+    minNights: 2,
+    maxNights: 14,
+    maxCertificates: 5,
+    // A hotel change is only suggested when it saves at least this share.
+    switchSaving: 0.1
+  };
  
   const nativeFetch = window.fetch.bind(window);
  
@@ -102,7 +114,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true },
+    tools: { resort: true, points: true, free: true, split: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -115,6 +127,10 @@
     currency: 'EUR',
     // Free Night Finder ranks by cash price ('cash') or points saved ('points').
     freeSort: 'cash',
+    // Split Stay: one-night prices per night of the stay, see loadSplit().
+    split: freshSplit(),
+    // Free Night Certificates the Split Stay may use.
+    certificates: 0,
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -143,6 +159,11 @@
     if (/^[A-Z]{3}$/.test(currency || '')) state.currency = currency;
 
     if (localStorage.getItem(FREE_SORT_KEY) === 'points') state.freeSort = 'points';
+
+    const certificates = parseInt(localStorage.getItem(SPLIT_CERTS_KEY), 10);
+    if (certificates >= 0) {
+      state.certificates = Math.min(SPLIT.maxCertificates, certificates);
+    }
 
     state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
     state.update.skipped = savedUpdate().skipped || null;
@@ -236,6 +257,7 @@
     state.pages = 0;
     state.batches = [];
     state.extras = { points: new Set(), pending: 0, error: '' };
+    state.split = freshSplit();
  
     render();
     status(reason);
@@ -629,6 +651,154 @@
       state.currencyError = `Exchange rates: ${error.message}`;
     }
 
+    render();
+  }
+
+  // status: idle, loading or done; nights[i] holds the prices for one night of the stay.
+  function freshSplit() {
+    return { status: 'idle', nights: [], done: 0, total: 0, errors: [] };
+  }
+
+  // Date of the given day after an ISO date, as an ISO date.
+  function addDays(date, days) {
+    const day = new Date(`${date}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() + days);
+
+    return day.toISOString().slice(0, 10);
+  }
+
+  // Cash price of one night in USD, like Hilton's own search asks for it.
+  const NIGHT_CASH_QUERY = `
+    query shopMultiPropAvail(
+      $ctyhocns: [String!],
+      $language: String!,
+      $input: ShopMultiPropAvailQueryInput!
+    ) {
+      shopMultiPropAvail(
+        input: $input,
+        language: $language,
+        ctyhocns: $ctyhocns
+      ) {
+        ctyhocn
+        statusCode
+        summary {
+          lowest {
+            amountAfterTax(currencyCode: "USD")
+          }
+        }
+      }
+    }
+  `;
+
+  // Requests a split stay sends: cash and points for each night of each results page.
+  const splitRequests = () => nights() * state.batches.length * 2;
+
+  // Loads the cash and points price of every single night of the stay, one night at a time.
+  async function loadSplit() {
+    const stay = nights();
+
+    if (
+      !state.tools.split ||
+      !state.search ||
+      state.split.status === 'loading' ||
+      stay < SPLIT.minNights ||
+      stay > SPLIT.maxNights ||
+      !state.batches.length
+    ) return;
+
+    const generation = state.generation;
+    const batches = [...state.batches];
+
+    state.split = {
+      status: 'loading',
+      nights: Array.from({ length: stay }, (_, index) => ({
+        date: addDays(state.search.arrival, index),
+        cash: new Map(),
+        points: new Map()
+      })),
+      done: 0,
+      total: stay * batches.length * 2,
+      errors: []
+    };
+
+    loadCurrencies();
+    render();
+
+    const split = state.split;
+
+    for (const night of split.nights) {
+      for (const batch of batches) {
+        for (const points of [false, true]) {
+          if (generation !== state.generation || state.split !== split) return;
+
+          // Switched off while loading: keep nothing half loaded.
+          if (!state.tools.split) {
+            state.split = freshSplit();
+            render();
+            return;
+          }
+
+          try {
+            const data = await post(
+              'shopMultiPropAvail',
+              points ? POINTS_QUERY : NIGHT_CASH_QUERY,
+              {
+                input: {
+                  ...batch.input,
+                  arrivalDate: night.date,
+                  departureDate: addDays(night.date, 1),
+                  specialRates: {
+                    ...(batch.input.specialRates || {}),
+                    hhonors: points
+                  }
+                },
+                ctyhocns: batch.codes,
+                language: 'en'
+              },
+              'dx_shop_search_app'
+            );
+
+            if (generation !== state.generation || state.split !== split) return;
+
+            for (const hotel of data?.shopMultiPropAvail || []) {
+              if (!hotel?.ctyhocn || hotel.statusCode !== 0) continue;
+
+              if (points) {
+                const perNight = hotel.summary?.hhonors?.dailyRmPointsRate;
+
+                if (Number.isFinite(perNight) && perNight > 0) {
+                  night.points.set(hotel.ctyhocn, {
+                    points: perNight,
+                    reward: rewardType(hotel.summary.hhonors) || 'standard'
+                  });
+                }
+              } else {
+                const amount = hotel.summary?.lowest?.amountAfterTax;
+
+                if (Number.isFinite(amount) && amount > 0) {
+                  night.cash.set(hotel.ctyhocn, amount);
+                }
+              }
+            }
+
+          } catch (error) {
+            if (generation !== state.generation || state.split !== split) return;
+
+            const issue = `${night.date} ${points ? 'points' : 'cash'}: ${error.message}`;
+            if (!split.errors.includes(issue)) split.errors.push(issue);
+          }
+
+          split.done++;
+          render();
+
+          if (split.done < split.total) await sleep(CONFIG.delay);
+        }
+      }
+    }
+
+    if (generation !== state.generation || state.split !== split) return;
+
+    split.status = 'done';
     render();
   }
 
@@ -1986,7 +2156,8 @@
   // View rates link
   // =====================================
  
-  function rateURL(entry, points = false) {
+  // dates ({ arrival, departure }) books part of the stay, e.g. one leg of a split stay.
+  function rateURL(entry, points = false, dates = null) {
     const s = state.search;
     if (!s) return '';
  
@@ -2000,8 +2171,8 @@
       entry.codeUsed || entry.code
     );
  
-    url.searchParams.set('arrivalDate', s.arrival);
-    url.searchParams.set('departureDate', s.departure);
+    url.searchParams.set('arrivalDate', dates?.arrival || s.arrival);
+    url.searchParams.set('departureDate', dates?.departure || s.departure);
  
     url.searchParams.set(
       'room1NumAdults',
@@ -2438,6 +2609,35 @@
     .hpt-free-note { padding: 0 14px 10px; font-size: 12px; color: #475569; }
     .hpt-empty-icon.free { color: #64748b; }
 
+    /* Split Stay page. */
+    .hpt-chip.split { background: #ffedd5; color: #9a3412; }
+    .hpt-stat.split { background: #fff7ed; }
+    .hpt-stat.split b, .hpt-stat.split span { color: #9a3412; }
+    .hpt-split-pick { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .hpt-split-pick .hpt-primary { flex: none; width: auto; padding: 0 14px; }
+    .hpt-split-stats { padding: 0 14px 12px; }
+    .hpt-split-card { border-top: 1px solid #e2e8f0; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+    .hpt-split-total { font-size: 12px; color: #475569; }
+    .hpt-leg {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 7px 9px;
+      border: 1px solid #e2e8f0;
+      border-radius: 9px;
+      font-size: 12px;
+    }
+    .hpt-leg .hpt-chip { flex: none; min-width: 52px; text-align: center; }
+    .hpt-leg-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; color: #475569; }
+    .hpt-leg-text b { color: #0f172a; font-weight: 600; overflow-wrap: anywhere; }
+    .hpt-leg a { font-weight: 600; white-space: nowrap; text-decoration: none; }
+    .hpt-split-row { border-top: 1px solid #f1f5f9; padding: 9px 14px; }
+    .hpt-split-row summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+    .hpt-split-row summary::-webkit-details-marker { display: none; }
+    .hpt-split-row summary .hpt-row > b { font-size: 13px; white-space: nowrap; }
+    .hpt-split-row[open] summary { margin-bottom: 6px; }
+    .hpt-split-row .hpt-leg + .hpt-leg { margin-top: 6px; }
+
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
     .hpt-tools { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -2469,6 +2669,7 @@
     }
     .hpt-tool-icon.points { background: #dbeafe; color: #1e40af; }
     .hpt-tool-icon.free { background: #ede9fe; color: #5b21b6; }
+    .hpt-tool-icon.split { background: #ffedd5; color: #9a3412; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -2669,6 +2870,7 @@
     resort: svg(20, '<path d="M12 3a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9z"/><path d="M12 12v7a2 2 0 0 0 4 0"/>'),
     points: svg(20, '<circle cx="9" cy="9" r="6"/><path d="M15.4 10.6A6 6 0 1 1 10.6 15.4"/>'),
     free: svg(20, '<path d="M4 5h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6V6a1 1 0 0 1 1-1z"/><path d="M14 5v2M14 11v2M14 17v2"/>'),
+    split: svg(20, '<path d="M3 12h6l4-5h8"/><path d="M13 17h8"/><path d="M9 12l4 5"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -3417,6 +3619,523 @@
     render();
   }
 
+  // =====================================
+  // Split Stay
+  // =====================================
+
+  // Value of points in the display currency; the point value is set in euro cents.
+  const pointsMoney = points =>
+    convert(points * state.pointValue / 100, 'EUR', state.currency);
+
+  // One hotel's nights: cash in the display currency, points and whether it is a Standard Room Reward.
+  function splitRows(code) {
+    return state.split.nights.map(night => {
+      const cash = night.cash.get(code);
+      const reward = night.points.get(code);
+
+      return {
+        cash: cash ? convert(cash, 'USD', state.currency) : null,
+        points: reward?.points || null,
+        standard: reward?.reward === 'standard'
+      };
+    });
+  }
+
+  // Points for one reward booking of nights [from, to). Of every 5 Standard Room Reward
+  // nights the cheapest is free (Silver and up).
+  function runPoints(rows, from, to) {
+    let points = 0;
+    let free = 0;
+
+    for (let start = from; start < to; start += 5) {
+      const block = rows.slice(start, Math.min(start + 5, to));
+
+      points += block.reduce((sum, row) => sum + row.points, 0);
+
+      if (block.length === 5 && block.every(row => row.standard)) {
+        points -= Math.min(...block.map(row => row.points));
+        free++;
+      }
+    }
+
+    return { points, free };
+  }
+
+  // Cheapest mix of cash nights, reward bookings and certificates for nights [from, to)
+  // at one hotel. Entry c is the best plan using at most c certificates, or null.
+  function mixPlans(rows, from, to, certificates) {
+    const table = Array.from({ length: to + 1 }, () => []);
+    // Plans link back to the plan they extend; steps are collected at the end.
+    table[from][0] = { value: 0, cash: 0, points: 0, prev: null, step: null };
+
+    const reach = (index, used, plan, step) => {
+      const cash = plan.cash + step.cash;
+      const points = plan.points + step.points;
+      const value = cash + pointsMoney(points);
+      const current = table[index][used];
+
+      if (current && current.value <= value) return;
+
+      table[index][used] = { value, cash, points, prev: plan, step };
+    };
+
+    for (let i = from; i < to; i++) {
+      for (let used = 0; used <= certificates; used++) {
+        const plan = table[i][used];
+        if (!plan) continue;
+
+        const row = rows[i];
+
+        if (row.cash !== null) {
+          reach(i + 1, used, plan, { kind: 'cash', from: i, to: i + 1, cash: row.cash, points: 0, free: 0 });
+        }
+
+        if (used < certificates && row.standard) {
+          reach(i + 1, used + 1, plan, { kind: 'certificate', from: i, to: i + 1, cash: 0, points: 0, free: 0 });
+        }
+
+        for (let end = i + 1; end <= to && rows[end - 1].points; end++) {
+          const run = runPoints(rows, i, end);
+          reach(end, used, plan, { kind: 'points', from: i, to: end, cash: 0, ...run });
+        }
+      }
+    }
+
+    const best = [];
+
+    for (let used = 0; used <= certificates; used++) {
+      const plan = table[to][used];
+      const previous = best[used - 1];
+
+      if (!plan || (previous && previous.value <= plan.value)) {
+        best.push(previous || null);
+        continue;
+      }
+
+      const steps = [];
+      for (let link = plan; link.step; link = link.prev) steps.unshift(link.step);
+
+      best.push({ value: plan.value, cash: plan.cash, points: plan.points, steps });
+    }
+
+    return best;
+  }
+
+  // Joins neighbouring cash nights and certificate nights at the same hotel into one leg.
+  function legs(steps) {
+    const joined = [];
+
+    for (const step of steps) {
+      const last = joined[joined.length - 1];
+
+      if (
+        last &&
+        last.kind === step.kind &&
+        last.code === step.code &&
+        last.to === step.from &&
+        step.kind !== 'points'
+      ) {
+        joined[joined.length - 1] = { ...last, to: step.to, cash: last.cash + step.cash };
+        continue;
+      }
+
+      joined.push({ ...step });
+    }
+
+    return joined;
+  }
+
+  let splitCache = null;
+
+  // Best split stay per hotel and, if it pays off, the best stay with one hotel change.
+  // Cached, since render() runs often and this is the expensive part.
+  function splitStays() {
+    const split = state.split;
+    const stay = split.nights.length;
+
+    if (split.status !== 'done' || !stay) return null;
+
+    const key = [
+      state.certificates,
+      state.pointValue,
+      state.currency,
+      state.currencies?.size,
+      state.hotels.size
+    ].join('|');
+
+    if (splitCache?.split !== split || splitCache.key !== key) {
+      splitCache = { split, key, result: computeSplit() };
+    }
+
+    return splitCache.result;
+  }
+
+  function computeSplit() {
+    const split = state.split;
+    const stay = split.nights.length;
+
+    // Cash comes in USD and the point value in euro cents.
+    if (convert(1, 'USD', state.currency) === null || pointsMoney(1) === null) {
+      return { note: ratesNote(), hotels: [], change: null, value: null, plan: null, saving: 0 };
+    }
+
+    const certificates = Math.min(state.certificates, stay);
+    const hotels = [];
+    const parts = [];
+
+    for (const hotel of state.hotels.values()) {
+      if (hotel.bookable === false) continue;
+
+      const rows = splitRows(hotel.code);
+
+      parts.push({
+        code: hotel.code,
+        // First k nights and the rest, for k = 1 … stay - 1.
+        head: Array.from({ length: stay }, (_, k) => k && mixPlans(rows, 0, k, certificates)),
+        tail: Array.from({ length: stay }, (_, k) => k && mixPlans(rows, k, stay, certificates))
+      });
+
+      const plan = mixPlans(rows, 0, stay, certificates)[certificates];
+
+      if (!plan) continue;
+
+      const allCash = rows.every(row => row.cash !== null)
+        ? rows.reduce((sum, row) => sum + row.cash, 0)
+        : null;
+
+      const allPoints = rows.every(row => row.points)
+        ? pointsMoney(runPoints(rows, 0, stay).points)
+        : null;
+
+      const single = [allCash, allPoints].filter(value => value !== null);
+      const baseline = single.length ? Math.min(...single) : null;
+      const steps = plan.steps.map(step => ({ ...step, code: hotel.code }));
+
+      hotels.push({
+        code: hotel.code,
+        name: hotelName(hotel.code),
+        plan: { ...plan, steps },
+        legs: legs(steps),
+        baseline,
+        saving: baseline === null ? 0 : Math.max(0, baseline - plan.value),
+        mixed: new Set(steps.map(step => step.kind)).size > 1
+      });
+    }
+
+    hotels.sort((a, b) => a.plan.value - b.plan.value || a.name.localeCompare(b.name));
+
+    // Moving hotels once, after night k.
+    let change = null;
+
+    for (let k = 1; k < stay; k++) {
+      for (const first of parts) {
+        for (const second of parts) {
+          if (first === second) continue;
+
+          for (let used = 0; used <= certificates; used++) {
+            const a = first.head[k][used];
+            const b = second.tail[k][certificates - used];
+
+            if (!a || !b) continue;
+
+            const value = a.cash + b.cash + pointsMoney(a.points + b.points);
+            if (change && change.value <= value) continue;
+
+            change = {
+              value,
+              cash: a.cash + b.cash,
+              points: a.points + b.points,
+              steps: [
+                ...a.steps.map(step => ({ ...step, code: first.code })),
+                ...b.steps.map(step => ({ ...step, code: second.code }))
+              ]
+            };
+          }
+        }
+      }
+    }
+
+    const best = hotels[0];
+
+    if (
+      !change ||
+      (best && change.value > best.plan.value * (1 - SPLIT.switchSaving))
+    ) {
+      change = null;
+    } else {
+      change.legs = legs(change.steps);
+      change.saving = best ? best.plan.value - change.value : 0;
+    }
+
+    // Cheapest stay paid one way only (all cash or all points at one hotel).
+    const plain = hotels
+      .map(row => row.baseline)
+      .filter(value => value !== null);
+
+    const value = change ? change.value : best?.plan.value ?? null;
+
+    return {
+      note: '',
+      hotels,
+      change,
+      value,
+      plan: change || best?.plan || null,
+      saving: plain.length && value !== null
+        ? Math.max(0, Math.min(...plain) - value)
+        : 0
+    };
+  }
+
+  const shortDate = date =>
+    new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC'
+    });
+
+  // What a leg costs, e.g. "≈ €450" or "104,000 pts · 1 free ≈ €450".
+  function legCost(leg) {
+    const count = leg.to - leg.from;
+
+    if (leg.kind === 'cash') return `≈ ${money(leg.cash)}`;
+
+    if (leg.kind === 'certificate') {
+      return count === 1 ? 'Free Night Certificate' : `${count} Free Night Certificates`;
+    }
+
+    return `${number(leg.points)} pts` +
+      (leg.free ? ` · ${leg.free} free` : '') +
+      ` ≈ ${money(pointsMoney(leg.points))}`;
+  }
+
+  const LEG_LABEL = { cash: 'Cash', points: 'Points', certificate: 'Certificate' };
+  const LEG_TONE = { cash: 'cash', points: 'points', certificate: 'free' };
+
+  function legsHTML(list, withHotel) {
+    const arrival = state.search.arrival;
+
+    return list.map(leg => {
+      const count = leg.to - leg.from;
+      const dates = {
+        arrival: addDays(arrival, leg.from),
+        departure: addDays(arrival, leg.to)
+      };
+
+      return `
+        <div class="hpt-leg">
+          <span class="hpt-chip ${LEG_TONE[leg.kind]}">${LEG_LABEL[leg.kind]}</span>
+          <div class="hpt-leg-text">
+            ${withHotel ? `<b>${html(hotelName(leg.code))}</b>` : ''}
+            <span>
+              ${html(shortDate(dates.arrival))} → ${html(shortDate(dates.departure))} ·
+              ${count} ${plural(count, 'night', 'nights')}
+            </span>
+            <span>${html(legCost(leg))}</span>
+          </div>
+          <a
+            href="${html(rateURL(state.hotels.get(leg.code) || { code: leg.code }, leg.kind !== 'cash', dates))}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Book ↗</a>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Short description of a plan, e.g. "3 cash · 5 points · 1 certificate".
+  function planSummary(steps) {
+    const count = { cash: 0, points: 0, certificate: 0 };
+
+    for (const step of steps) count[step.kind] += step.to - step.from;
+
+    return [
+      count.cash ? `${count.cash} cash` : '',
+      count.points ? `${count.points} points` : '',
+      count.certificate
+        ? `${count.certificate} ${plural(count.certificate, 'certificate', 'certificates')}`
+        : ''
+    ].filter(Boolean).join(' · ');
+  }
+
+  // Why the Split Stay can't run for this search, or ''.
+  function splitBlocked() {
+    const stay = nights();
+
+    if (!state.search) return 'Waiting for a search';
+    if (stay < SPLIT.minNights) return `Needs a stay of ${SPLIT.minNights} or more nights`;
+    if (stay > SPLIT.maxNights) return `Works for stays of up to ${SPLIT.maxNights} nights`;
+    if (!state.batches.length) return 'Waiting for hotels';
+
+    return '';
+  }
+
+  function renderSplit() {
+    const root = $('hpt-split');
+    const split = state.split;
+    const blocked = splitBlocked();
+    const loading = split.status === 'loading';
+
+    $('hpt-split-controls').hidden = Boolean(blocked);
+
+    const select = $('hpt-certs');
+    if (document.activeElement !== select) select.value = String(state.certificates);
+
+    const load = $('hpt-split-load');
+    load.disabled = loading;
+    $('hpt-split-label').textContent = split.status === 'done'
+      ? 'Reload nightly prices'
+      : 'Load nightly prices';
+
+    if (blocked) {
+      $('hpt-split-status').innerHTML = '';
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>${html(blocked)}</b>
+          <p>Search a destination and dates on Hilton.</p>
+        </div>
+      `;
+      return;
+    }
+
+    if (loading) {
+      const night = Math.min(
+        split.nights.length,
+        Math.floor(split.done / (split.total / split.nights.length)) + 1
+      );
+
+      $('hpt-split-status').innerHTML = `
+        <div class="hpt-progress">
+          <div class="hpt-row">
+            <b>Loading night ${night} of ${split.nights.length}</b>
+            <span>${split.done}/${split.total} requests</span>
+          </div>
+          <div class="hpt-bar">
+            <div style="width:${Math.round(100 * split.done / split.total)}%"></div>
+          </div>
+        </div>
+      `;
+      root.innerHTML = '';
+      return;
+    }
+
+    if (split.status === 'idle') {
+      const requests = splitRequests();
+
+      $('hpt-split-status').textContent =
+        `Sends ${requests} requests to Hilton (cash and points for each night), ` +
+        `about ${Math.max(1, Math.round(requests * (CONFIG.delay + 400) / 60000))} min.`;
+      root.innerHTML = '';
+      return;
+    }
+
+    const result = splitStays();
+    const errors = split.errors.length
+      ? `${split.errors.length} of ${split.total} requests failed`
+      : '';
+
+    $('hpt-split-status').textContent =
+      [errors, result.note].filter(Boolean).join(' · ');
+
+    if (!result.hotels.length && !result.change) {
+      root.innerHTML = result.note ? '' : `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.split}</div>
+          <b>No hotel has a price for every night</b>
+          <p>Each night needs a cash rate, a reward room or a certificate. Try other dates.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const [best, ...rest] = result.hotels;
+    const change = result.change;
+
+    // Preserve expanded hotels during rerenders.
+    const opened = new Set(
+      [...root.querySelectorAll('details[open]')].map(x => x.dataset.detail)
+    );
+
+    root.innerHTML = `
+      <div class="hpt-split-stats">
+        <div class="hpt-stats">
+          <div class="hpt-stat split">
+            <b>≈ ${html(money(result.value))}</b>
+            <span>cheapest stay</span>
+          </div>
+          <div class="hpt-stat${result.saving ? ' good' : ''}">
+            <b>≈ ${html(money(result.saving))}</b>
+            <span>saved vs. all cash or all points</span>
+          </div>
+        </div>
+      </div>
+
+      ${change ? `
+        <div class="hpt-split-card">
+          <div class="hpt-row">
+            <span class="hpt-name">Change hotels once</span>
+            ${change.saving > 0
+              ? `<span class="hpt-chip split">−${html(money(change.saving))}</span>`
+              : ''}
+          </div>
+          <div class="hpt-split-total">
+            ≈ ${html(money(change.value))} · ${html(planSummary(change.steps))}
+          </div>
+          ${legsHTML(change.legs, true)}
+        </div>
+      ` : ''}
+
+      ${best ? `
+        <div class="hpt-split-card">
+          <div class="hpt-row">
+            <span class="hpt-name">${html(best.name)}</span>
+            ${best.mixed && best.saving
+              ? `<span class="hpt-chip split">−${html(money(best.saving))}</span>`
+              : ''}
+          </div>
+          <div class="hpt-split-total">
+            ≈ ${html(money(best.plan.value))} · ${html(planSummary(best.plan.steps))}
+          </div>
+          ${legsHTML(best.legs, false)}
+        </div>
+      ` : ''}
+
+      ${rest.length ? `<div class="hpt-free-title">Other hotels</div>` : ''}
+
+      ${rest.map(row => `
+        <details
+          class="hpt-split-row"
+          data-detail="${html(row.code)}"
+          ${opened.has(row.code) ? 'open' : ''}
+        >
+          <summary>
+            <span class="hpt-row">
+              <span class="hpt-name">${html(row.name)}</span>
+              <b>≈ ${html(money(row.plan.value))}</b>
+            </span>
+            <span class="hpt-free-sub">
+              <span>${html(planSummary(row.plan.steps))}</span>
+              <span>${row.mixed && row.saving ? `saves ≈ ${html(money(row.saving))}` : ''}</span>
+            </span>
+          </summary>
+          ${legsHTML(row.legs, false)}
+        </details>
+      `).join('')}
+    `;
+  }
+
+  function setCertificates(value) {
+    const count = parseInt(value, 10);
+
+    state.certificates = count >= 0 ? Math.min(SPLIT.maxCertificates, count) : 0;
+
+    try {
+      localStorage.setItem(SPLIT_CERTS_KEY, String(state.certificates));
+    } catch {}
+
+    render();
+  }
+
   function renderSettings() {
     const point = $('hpt-point');
 
@@ -3515,10 +4234,15 @@
 
     $('hpt-tools').hidden = !on;
     // Point value and currency only matter for points comparisons.
-    $('hpt-shared').hidden = !wantsPoints();
+    const valued = wantsPoints() || state.tools.split;
+
+    $('hpt-shared').hidden = !valued;
     $('hpt-shared-note').hidden = !(state.tools.points && state.tools.free);
 
-    $('hpt-settings-sum').textContent = wantsPoints()
+    state.panel.querySelector('.hpt-tool[data-view="split"]')
+      .setAttribute('aria-busy', String(state.split.status === 'loading'));
+
+    $('hpt-settings-sum').textContent = valued
       ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
         `${state.pointValue} ct · ${state.currency}`
       : `${on} of ${total} tools on`;
@@ -3585,6 +4309,24 @@
           : state.hotels.size
             ? 'No Standard Room Reward for these dates'
             : 'Waiting for hotels';
+
+    const blocked = splitBlocked();
+    const split = state.split;
+    const splitResult = splitStays();
+
+    $('hpt-split-chip').textContent = splitResult?.saving > 0
+      ? `−${money(splitResult.saving)}`
+      : '';
+
+    $('hpt-split-sub').textContent = blocked
+      || (split.status === 'loading'
+        ? `Loading nightly prices · ${split.done}/${split.total} requests`
+        : split.status === 'idle'
+          ? `Load nightly prices on demand · ${splitRequests()} requests`
+          : splitResult.note
+            || (splitResult.plan
+              ? `Best: ≈ ${money(splitResult.value)} · ${planSummary(splitResult.plan.steps)}`
+              : 'No hotel has a price for every night'));
 
     const top = state.tools.resort && topFind();
 
@@ -3724,6 +4466,7 @@
     renderUpdate();
     renderAll();
     renderFree();
+    renderSplit();
 
     const root = $('hpt-results');
 
@@ -4098,6 +4841,18 @@
               </span>
               ${ICON.chevron}
             </button>
+
+            <button class="hpt-tool" type="button" data-view="split">
+              <span class="hpt-tool-icon split">${ICON.split}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Split Stay</b>
+                  <span id="hpt-split-chip" class="hpt-chip split"></span>
+                </span>
+                <span id="hpt-split-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
           </div>
 
           <div id="hpt-top" class="hpt-section" hidden>
@@ -4158,6 +4913,21 @@
                   role="switch"
                   data-tool="free"
                   aria-label="Free Night Finder"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small split">${ICON.split}</span>
+                <span class="hpt-tool-text">
+                  <b>Split Stay</b>
+                  <span id="hpt-split-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="split"
+                  aria-label="Split Stay"
                 >
               </label>
 
@@ -4280,6 +5050,43 @@
             A single certificate night can still differ; check it on Hilton before booking.
           </div>
         </div>
+
+        <div id="hpt-view-split" hidden>
+          <div id="hpt-split-controls" class="hpt-controls">
+            <div class="hpt-free-intro">
+              Prices every night of the stay on its own and finds the cheapest mix of
+              cash nights, points nights and Free Night Certificates, also across two hotels.
+            </div>
+
+            <div class="hpt-split-pick">
+              <label class="hpt-settings">
+                Certificates
+                <select id="hpt-certs" aria-label="Free Night Certificates to use">
+                  ${Array.from(
+                    { length: SPLIT.maxCertificates + 1 },
+                    (_, count) => `<option value="${count}">${count}</option>`
+                  ).join('')}
+                </select>
+              </label>
+
+              <button id="hpt-split-load" class="hpt-primary" type="button">
+                ${ICON.refresh}
+                <span id="hpt-split-label" class="hpt-idle">Load nightly prices</span>
+                <span class="hpt-busy">Loading…</span>
+              </button>
+            </div>
+
+            <div id="hpt-split-status" class="hpt-hint"></div>
+          </div>
+
+          <div id="hpt-split" class="hpt-split"></div>
+
+          <div class="hpt-footer">
+            Nightly prices come from one-night searches and can differ from a longer stay's rates.
+            In each reward booking, the cheapest of every 5 Standard Room Reward nights is counted
+            free (Silver and up). Each leg is booked separately; check prices on Hilton before booking.
+          </div>
+        </div>
       </div>
     `;
 
@@ -4323,6 +5130,9 @@
       const sort = event.target.closest('[data-free-sort]')?.dataset.freeSort;
       if (sort) setFreeSort(sort);
     });
+
+    $('hpt-split-load').onclick = loadSplit;
+    $('hpt-certs').onchange = event => setCertificates(event.target.value);
 
     $('hpt-update-auto').onchange = event => {
       state.update.auto = event.target.checked;

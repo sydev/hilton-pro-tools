@@ -5,7 +5,7 @@ Possible further tools for Hilton Pro Tools, ordered by value and effort. Each b
 ## High value, builds on what exists
 
 1. **Free Night Certificate finder** *(done in 0.5.0 as Free Night Finder)*. Aspire cardholders get Free Night Certificates, which are only valid for Standard Room Rewards. Show the hotels of the search where a Standard Room Reward is available, sorted by what the certificate is worth there (points price, or cash price per night). Needs little more than the points prices `loadPoints()` already loads, plus telling Standard apart from Premium Room Rewards.
-2. **Split stay / mix optimizer.** Builds on the 5th night free (0.4.1). For an 8-night stay, "5 nights on points (one free) + 3 nights cash" is often cheapest, sometimes also switching hotels mid-stay. Computes the cheapest mix of points, cash and certificates. Needs prices per night or per partial stay, so more requests.
+2. **Split stay / mix optimizer** *(done in 0.6.0 as Split Stay)*. Builds on the 5th night free (0.4.1). For an 8-night stay, "5 nights on points (one free) + 3 nights cash" is often cheapest, sometimes also switching hotels mid-stay. Computes the cheapest mix of points, cash and certificates. Needs prices per night or per partial stay, so more requests.
 3. **Flexible dates / price calendar.** Query the same destination for ±1–3 days or shifted stays and show a hotel × arrival day matrix with the cheapest cash or points price. Especially handy for the resort credit search, since Semi-Flex is not offered on every date. Request-heavy: throttle strictly (`CONFIG` caps like the scan).
 
 ## Medium value
