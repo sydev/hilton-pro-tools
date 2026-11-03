@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.4.1
-// @description  Aspire resort credit finder (Semi-Flex deposit rates) and cash vs. points comparison for Hilton searches
+// @version      0.5.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison and Free Night Certificate finder for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -36,18 +36,21 @@
   const TOOLS_KEY = 'hilton-pro-tools-tools';
   const UPDATE_KEY = 'hilton-pro-tools-update';
   const UPDATE_AUTO_KEY = 'hilton-pro-tools-update-auto';
+  const FREE_SORT_KEY = 'hilton-pro-tools-free-sort';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
     home: 'Hilton Pro Tools',
     resort: 'Resort Finder',
-    points: 'Cash vs. Points'
+    points: 'Cash vs. Points',
+    free: 'Free Night Finder'
   };
 
   // Description of each tool in the home page's on/off switches.
   const TOOL_INFO = {
     resort: 'Scans Resort Credit hotels for Semi-Flex rates',
-    points: 'Loads points prices and exchange rates'
+    points: 'Loads points prices and exchange rates',
+    free: 'Finds Standard Room Rewards for Free Night Certificates'
   };
 
   // Update check against the published script on GitHub.
@@ -99,7 +102,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true },
+    tools: { resort: true, points: true, free: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -110,6 +113,8 @@
     pointValue: 0.433,
     // Currency the comparison is shown in.
     currency: 'EUR',
+    // Free Night Finder ranks by cash price ('cash') or points saved ('points').
+    freeSort: 'cash',
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -136,6 +141,8 @@
 
     const currency = localStorage.getItem(CURRENCY_KEY);
     if (/^[A-Z]{3}$/.test(currency || '')) state.currency = currency;
+
+    if (localStorage.getItem(FREE_SORT_KEY) === 'points') state.freeSort = 'points';
 
     state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
     state.update.skipped = savedUpdate().skipped || null;
@@ -490,10 +497,23 @@
     }
   `;
 
+  // Points prices feed Cash vs. Points and the Free Night Finder.
+  const wantsPoints = () => state.tools.points || state.tools.free;
+
+  // Hilton names the lowest award "Standard Room Reward" or "Premium Room Reward";
+  // a Free Night Certificate only covers a Standard Room Reward.
+  function rewardType(hhonors) {
+    const name = hhonors?.ratePlan?.ratePlanName;
+    if (!name) return null;
+
+    return /premium/i.test(name) ? 'premium' : 'standard';
+  }
+
   async function loadPoints(codes, input, generation) {
+    // Hilton's own points search may lack the rate plan name, so ask again for those.
     const missing = codes.filter(code =>
       !state.extras.points.has(code) &&
-      !state.hotels.get(code)?.points
+      !state.hotels.get(code)?.reward
     );
 
     if (!missing.length) return;
@@ -528,6 +548,7 @@
 
         if (entry && Number.isFinite(points) && points > 0) {
           entry.points = points;
+          entry.reward = rewardType(hotel.summary.hhonors) || 'standard';
         }
       }
 
@@ -712,11 +733,16 @@
             state.names.get(code) ||
             old.name ||
             '',
-          // Standard Room Reward points per night, if Hilton returned one.
+          // Lowest reward points per night, if Hilton returned one.
           points:
             Number.isFinite(points) && points > 0
               ? points
               : old.points || null,
+          // 'standard' or 'premium' Room Reward, null while unknown.
+          reward:
+            Number.isFinite(points) && points > 0
+              ? rewardType(hotel.summary.hhonors)
+              : old.reward || null,
           // Cheapest cash rate for the whole stay, after tax.
           cash: Number.isFinite(lowest?.amountAfterTax)
             ? {
@@ -737,7 +763,7 @@
       state.pages++;
       state.batches.push({ codes, input });
 
-      if (state.tools.points) {
+      if (wantsPoints()) {
         loadPoints(codes, input, generation);
         loadCurrencies();
       }
@@ -1960,7 +1986,7 @@
   // View rates link
   // =====================================
  
-  function rateURL(entry) {
+  function rateURL(entry, points = false) {
     const s = state.search;
     if (!s) return '';
  
@@ -1985,6 +2011,9 @@
     if (s.currency) {
       url.searchParams.set('displayCurrency', s.currency);
     }
+
+    // Opens the room selection with reward rates, like Hilton's "Use Points".
+    if (points) url.searchParams.set('redeemPts', 'true');
  
     return url.href;
   }
@@ -2360,6 +2389,54 @@
     }
     .hpt-chip.points { background: #dbeafe; color: #1e40af; }
     .hpt-chip.cash { background: #dcfce7; color: #166534; }
+    .hpt-chip.free { background: #ede9fe; color: #5b21b6; }
+    .hpt-chip.muted { background: #f1f5f9; color: #475569; font-weight: 600; }
+
+    /* Free Night Finder page. */
+    .hpt-stat.free { background: #f5f3ff; }
+    .hpt-stat.free b, .hpt-stat.free span { color: #5b21b6; }
+    .hpt-free-intro { font-size: 12px; line-height: 1.45; color: #475569; }
+    .hpt-free-sort { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: #475569; }
+    .hpt-seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #f1f5f9; }
+    #hilton-pro-tools .hpt-seg button {
+      height: 26px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: none;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    #hilton-pro-tools .hpt-seg button[aria-pressed="true"] {
+      background: #fff;
+      color: #0f172a;
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+    }
+    .hpt-free-top { border-top: 1px solid #e2e8f0; padding: 12px 14px 6px; display: flex; flex-direction: column; gap: 6px; }
+    .hpt-free-best {
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      border-radius: 10px;
+      padding: 9px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 12px;
+      color: #4c1d95;
+    }
+    .hpt-free-best b { font-size: 15px; font-weight: 700; }
+    .hpt-free-best .hpt-row span { font-weight: 600; text-align: right; }
+    .hpt-free-row { padding: 9px 14px; border-top: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 3px; }
+    .hpt-free-row .hpt-row > b { font-size: 13px; white-space: nowrap; }
+    .hpt-free-sub { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #475569; }
+    .hpt-free-sub a, .hpt-free-top a { font-weight: 600; white-space: nowrap; text-decoration: none; }
+    .hpt-free-title { border-top: 1px solid #e2e8f0; padding: 10px 14px 4px; font-size: 12px; font-weight: 600; color: #334155; }
+    .hpt-free-off { padding: 7px 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: #475569; line-height: 1.3; }
+    .hpt-free-off:last-child { padding-bottom: 12px; }
+    .hpt-free-note { padding: 0 14px 10px; font-size: 12px; color: #475569; }
+    .hpt-empty-icon.free { color: #64748b; }
 
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
@@ -2391,6 +2468,7 @@
       position: relative;
     }
     .hpt-tool-icon.points { background: #dbeafe; color: #1e40af; }
+    .hpt-tool-icon.free { background: #ede9fe; color: #5b21b6; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -2446,6 +2524,7 @@
     .hpt-acc-sum { flex: 1; min-width: 0; text-align: right; }
     .hpt-acc-body { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
     .hpt-shared { margin-top: 4px; display: flex; flex-direction: column; gap: 10px; }
+    .hpt-shared-note { font-size: 11px; line-height: 1.45; color: #475569; }
 
     /* Update check: banner on the home page and version row in Settings. */
     .hpt-update-wrap { padding: 14px 14px 0; }
@@ -2589,6 +2668,7 @@
     sliders: svg(16, '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>', '#475569'),
     resort: svg(20, '<path d="M12 3a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9z"/><path d="M12 12v7a2 2 0 0 0 4 0"/>'),
     points: svg(20, '<circle cx="9" cy="9" r="6"/><path d="M15.4 10.6A6 6 0 1 1 10.6 15.4"/>'),
+    free: svg(20, '<path d="M4 5h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6V6a1 1 0 0 1 1-1z"/><path d="M14 5v2M14 11v2M14 17v2"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -3104,6 +3184,239 @@
     `;
   }
 
+  // =====================================
+  // Free Night Finder
+  // =====================================
+
+  // Hotels of the search by whether a Free Night Certificate covers a night there,
+  // usable ones ranked by what that night is worth.
+  function freeNights() {
+    const stay = nights();
+    const usable = [];
+    const unusable = [];
+
+    for (const hotel of state.hotels.values()) {
+      // A certificate can't be booked at a closed hotel anyway.
+      if (hotel.bookable === false) continue;
+
+      const name =
+        state.resorts?.get(hotel.code)?.name ||
+        hotel.name ||
+        state.names.get(hotel.code) ||
+        hotel.code;
+
+      if (!hotel.points) {
+        // No answer yet is not the same as no reward rooms.
+        if (
+          state.extras.pending ||
+          state.extras.error ||
+          !state.extras.points.has(hotel.code)
+        ) continue;
+
+        unusable.push({ hotel, name, reason: 'No reward rooms' });
+        continue;
+      }
+
+      if (hotel.reward === 'premium') {
+        unusable.push({ hotel, name, reason: 'Premium only' });
+        continue;
+      }
+
+      if (hotel.reward !== 'standard') continue;
+
+      usable.push({
+        hotel,
+        name,
+        // Cheapest cash rate for one night, which the certificate saves.
+        cash: hotel.cash && stay
+          ? convert(hotel.cash.amount / stay, hotel.cash.currency, state.currency)
+          : null,
+        // The point value is set in euro cents.
+        value: convert(hotel.points * state.pointValue / 100, 'EUR', state.currency)
+      });
+    }
+
+    const byPoints = state.freeSort === 'points';
+    const key = row => byPoints ? row.hotel.points : row.cash ?? -1;
+
+    usable.sort((a, b) =>
+      key(b) - key(a) ||
+      b.hotel.points - a.hotel.points ||
+      a.name.localeCompare(b.name)
+    );
+
+    // Premium only first: those may still open up on other dates.
+    unusable.sort((a, b) =>
+      (b.reason === 'Premium only') - (a.reason === 'Premium only') ||
+      a.name.localeCompare(b.name)
+    );
+
+    return { usable, unusable };
+  }
+
+  // Headline, its unit and the second line of a usable hotel for the chosen ranking.
+  function freeLines(row) {
+    const points = `${number(row.hotel.points)} pts`;
+
+    if (state.freeSort === 'points' || row.cash === null) {
+      return {
+        headline: points,
+        unit: 'saved / night',
+        sub: row.cash !== null
+          ? `Otherwise ≈ ${money(row.cash)} cash a night`
+          : row.hotel.cash
+            ? ratesNote() || 'No cash rate'
+            : 'No cash rate'
+      };
+    }
+
+    return {
+      headline: `≈ ${money(row.cash)}`,
+      unit: 'cash / night',
+      sub: `or ${points}` +
+        (row.value === null ? '' : ` ≈ ${money(row.value)}`) +
+        ' a night'
+    };
+  }
+
+  function renderFree() {
+    const root = $('hpt-free');
+    const s = state.search;
+
+    if (!s) {
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>Waiting for a Hilton search</b>
+          <p>Search a destination and dates on Hilton.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const { usable, unusable } = freeNights();
+    const loading = state.extras.pending > 0;
+
+    const note = loading
+      ? 'Loading points prices…'
+      : [state.extras.error, ratesNote()].filter(Boolean).join(' · ');
+
+    const notUsable = unusable.length ? `
+      <div class="hpt-free-title">Certificate not usable</div>
+      ${unusable.map(row => `
+        <div class="hpt-free-off">
+          <span>${html(row.name)}</span>
+          <span class="hpt-chip muted">${html(row.reason)}</span>
+        </div>
+      `).join('')}
+    ` : '';
+
+    if (!usable.length) {
+      const premium = unusable.filter(row => row.reason === 'Premium only').length;
+
+      root.innerHTML = loading || !unusable.length
+        ? `<div class="hpt-controls"><div class="hpt-hint">${html(note || 'No hotels yet')}</div></div>`
+        : `
+          <div class="hpt-empty">
+            <div class="hpt-empty-icon free">${ICON.free}</div>
+            <b>No Standard Room Reward for these dates</b>
+            <p>
+              ${premium
+                ? `${premium} ${plural(premium, 'hotel only offers', 'hotels only offer')} Premium Room Rewards, which certificates don't cover.`
+                : 'No hotel in this search has reward rooms.'}
+              Try other dates.
+            </p>
+          </div>
+          ${notUsable}
+        `;
+      return;
+    }
+
+    const lines = usable.map(freeLines);
+    const [top, ...rest] = usable;
+    const byPoints = state.freeSort === 'points';
+
+    root.innerHTML = `
+      <div class="hpt-controls">
+        <div class="hpt-stats">
+          <div class="hpt-stat free">
+            <b>${usable.length} of ${usable.length + unusable.length}</b>
+            <span>with Standard Room Reward</span>
+          </div>
+          <div class="hpt-stat">
+            <b>${html(lines[0].headline)}</b>
+            <span>best value per certificate</span>
+          </div>
+        </div>
+
+        <div class="hpt-free-intro">
+          A Free Night Certificate covers one night of a Standard Room Reward.
+          Ranked by what that night is worth.
+        </div>
+
+        <div class="hpt-free-sort">
+          <span>Value by</span>
+          <div class="hpt-seg" role="group" aria-label="Rank by">
+            <button type="button" data-free-sort="cash" aria-pressed="${!byPoints}">Cash price</button>
+            <button type="button" data-free-sort="points" aria-pressed="${byPoints}">Points saved</button>
+          </div>
+        </div>
+      </div>
+
+      ${note ? `<div class="hpt-free-note">${html(note)}</div>` : ''}
+
+      <div class="hpt-free-top">
+        <div class="hpt-row">
+          <span class="hpt-name">${html(top.name)}</span>
+          <span class="hpt-chip cash">Standard</span>
+        </div>
+        <div class="hpt-free-best">
+          <div class="hpt-row">
+            <b>${html(lines[0].headline)}</b>
+            <span>${html(lines[0].unit)}</span>
+          </div>
+          <div>${html(lines[0].sub)}</div>
+        </div>
+        <div class="hpt-links">
+          <a
+            href="${html(rateURL(top.hotel, true))}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Book with points ↗</a>
+        </div>
+      </div>
+
+      ${rest.map((row, index) => `
+        <div class="hpt-free-row">
+          <div class="hpt-row">
+            <span class="hpt-name">${html(row.name)}</span>
+            <b>${html(lines[index + 1].headline)}</b>
+          </div>
+          <div class="hpt-free-sub">
+            <span>${html(lines[index + 1].sub)}</span>
+            <a
+              href="${html(rateURL(row.hotel, true))}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >Book ↗</a>
+          </div>
+        </div>
+      `).join('')}
+
+      ${notUsable}
+    `;
+  }
+
+  function setFreeSort(sort) {
+    state.freeSort = sort === 'points' ? 'points' : 'cash';
+
+    try {
+      localStorage.setItem(FREE_SORT_KEY, state.freeSort);
+    } catch {}
+
+    render();
+  }
+
   function renderSettings() {
     const point = $('hpt-point');
 
@@ -3202,9 +3515,10 @@
 
     $('hpt-tools').hidden = !on;
     // Point value and currency only matter for points comparisons.
-    $('hpt-shared').hidden = !state.tools.points;
+    $('hpt-shared').hidden = !wantsPoints();
+    $('hpt-shared-note').hidden = !(state.tools.points && state.tools.free);
 
-    $('hpt-settings-sum').textContent = state.tools.points
+    $('hpt-settings-sum').textContent = wantsPoints()
       ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
         `${state.pointValue} ct · ${state.currency}`
       : `${on} of ${total} tools on`;
@@ -3213,10 +3527,12 @@
     state.panel.querySelector('.hpt-tool[data-view="resort"]')
       .setAttribute('aria-busy', String(Boolean(s && state.busy)));
 
-    state.panel.querySelector('.hpt-tool[data-view="points"]')
-      .setAttribute('aria-busy', String(Boolean(
-        s && (state.extras.pending > 0 || state.currencies?.size === 0)
-      )));
+    for (const tool of ['points', 'free']) {
+      state.panel.querySelector(`.hpt-tool[data-view="${tool}"]`)
+        .setAttribute('aria-busy', String(Boolean(
+          s && (state.extras.pending > 0 || state.currencies?.size === 0)
+        )));
+    }
 
     $('hpt-resort-chip').textContent = matched
       ? `${matched} ${plural(matched, 'match', 'matches')}`
@@ -3252,6 +3568,22 @@
           ? 'Loading points prices…'
           : rows.length
             ? `${rows.length} ${plural(rows.length, 'hotel', 'hotels')} · no points prices`
+            : 'Waiting for hotels';
+
+    const { usable } = s ? freeNights() : { usable: [] };
+
+    $('hpt-free-chip').textContent = usable.length
+      ? `${usable.length} usable`
+      : '';
+
+    $('hpt-free-sub').textContent = !s
+      ? 'Waiting for a search'
+      : usable.length
+        ? `Best: ${freeLines(usable[0]).headline} a night at ${usable[0].name}`
+        : state.extras.pending
+          ? 'Loading points prices…'
+          : state.hotels.size
+            ? 'No Standard Room Reward for these dates'
             : 'Waiting for hotels';
 
     const top = state.tools.resort && topFind();
@@ -3316,7 +3648,7 @@
       }
     }
 
-    if (tool === 'points' && on && state.search) {
+    if ((tool === 'points' || tool === 'free') && on && state.search) {
       for (const batch of state.batches) {
         loadPoints(batch.codes, batch.input, state.generation);
       }
@@ -3391,6 +3723,7 @@
     renderHome(eligible, matched);
     renderUpdate();
     renderAll();
+    renderFree();
 
     const root = $('hpt-results');
 
@@ -3753,6 +4086,18 @@
               </span>
               ${ICON.chevron}
             </button>
+
+            <button class="hpt-tool" type="button" data-view="free">
+              <span class="hpt-tool-icon free">${ICON.free}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Free Night Finder</b>
+                  <span id="hpt-free-chip" class="hpt-chip free"></span>
+                </span>
+                <span id="hpt-free-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
           </div>
 
           <div id="hpt-top" class="hpt-section" hidden>
@@ -3801,6 +4146,21 @@
                 >
               </label>
 
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small free">${ICON.free}</span>
+                <span class="hpt-tool-text">
+                  <b>Free Night Finder</b>
+                  <span id="hpt-free-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="free"
+                  aria-label="Free Night Finder"
+                >
+              </label>
+
               <div id="hpt-shared" class="hpt-shared">
                 <div class="hpt-section-title">Shared settings</div>
 
@@ -3823,6 +4183,10 @@
                       aria-label="Currency for prices and point values"
                     ></select>
                   </label>
+                </div>
+
+                <div id="hpt-shared-note" class="hpt-shared-note">
+                  Cash vs. Points and Free Night Finder share one points request per results page.
                 </div>
               </div>
 
@@ -3907,6 +4271,15 @@
             <div id="hpt-all-list"></div>
           </div>
         </div>
+
+        <div id="hpt-view-free" hidden>
+          <div id="hpt-free" class="hpt-free"></div>
+
+          <div class="hpt-footer">
+            Based on Hilton's lowest points price for the whole stay.
+            A single certificate night can still differ; check it on Hilton before booking.
+          </div>
+        </div>
       </div>
     `;
 
@@ -3946,6 +4319,9 @@
       if (action === 'check') checkUpdate(true);
       if (action === 'install') installUpdate();
       if (action === 'skip') skipUpdate();
+
+      const sort = event.target.closest('[data-free-sort]')?.dataset.freeSort;
+      if (sort) setFreeSort(sort);
     });
 
     $('hpt-update-auto').onchange = event => {

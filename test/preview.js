@@ -7,9 +7,9 @@
 // Set CHROMIUM_PATH to use an already installed Chromium instead of Playwright's own.
 // Prints the CSV header and one row, the requests sent and any page errors;
 // writes home-scanning.png, scanning.png, minimized-scanning.png, done-no-fx.png,
-// done.png, home.png, home-settings.png, all-hotels.png, minimized.png,
-// home-points-off.png, home-update.png, minimized-update.png and
-// home-installing.png into the output folder.
+// done.png, home.png, home-settings.png, all-hotels.png, free-nights.png,
+// free-nights-points.png, minimized.png, home-points-off.png, home-update.png,
+// minimized-update.png and home-installing.png into the output folder.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -59,7 +59,7 @@ const officialPage = () => {
 };
 
 const OTHERS = [
-  { code: 'MLEKAHI', name: 'Hilton Kanuhura (non-resort test)', cash: 3900, points: 70000 },
+  { code: 'MLEKAHI', name: 'Hilton Kanuhura (non-resort test)', cash: 3900, points: 70000, premium: true },
   { code: 'MLECICI', name: 'Canopy Male', cash: 1450, points: 60000 },
   { code: 'MLEHXHX', name: 'Hampton Hulhumale', cash: 980, points: null },
   { code: 'MLEXXXX', name: 'Closed Hotel', closed: true },
@@ -145,7 +145,7 @@ function graphql(body) {
             currencyCode: 'MVR',
             lengthOfStay: 8,
             summary: points
-              ? { hhonors: perNight ? { dailyRmPointsRate: perNight, ratePlan: { ratePlanName: 'Standard Room Reward' } } : null }
+              ? { hhonors: perNight ? { dailyRmPointsRate: perNight, ratePlan: { ratePlanName: other?.premium ? 'Premium Room Rewards' : 'Standard Room Reward' } } : null }
               : { lowest: { amountAfterTax: other ? other.cash : CASH[code], ratePlan: { ratePlanName: 'Honors Discount' } } }
           };
         })
@@ -275,6 +275,16 @@ function graphql(body) {
   await page.locator('#hpt-view-points').screenshot({ path: path.join(outDir, 'all-hotels.png') });
   await page.evaluate(() => { document.querySelector('#hpt-body').scrollTop = 0; });
 
+  await page.click('#hpt-back');
+  await page.click('.hpt-tool[data-view="free"]');
+  await page.waitForTimeout(100);
+  await page.locator('#hpt-view-free').screenshot({ path: path.join(outDir, 'free-nights.png') });
+  console.log('book link:', await page.getAttribute('#hpt-free .hpt-free-top a', 'href'));
+  await page.click('[data-free-sort="points"]');
+  await page.locator('#hpt-view-free').screenshot({ path: path.join(outDir, 'free-nights-points.png') });
+  await page.click('[data-free-sort="cash"]');
+  await page.click('#hpt-back');
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -287,10 +297,10 @@ function graphql(body) {
   console.log('status:', await page.textContent('#hpt-status'));
   console.log('requests:', LOG.filter(x => !x.startsWith('hotel_')));
 
-  // Cash vs. Points switched off: no points or currency requests.
+  // Cash vs. Points and Free Night Finder switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

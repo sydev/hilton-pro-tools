@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **Free Night Finder:** a third tool for Free Night Certificates. It shows which hotels of the search have a Standard Room Reward for your dates (the only award a certificate covers) and ranks them by what one night is worth, by **Cash price** (cheapest cash rate per night) or **Points saved** (points per night). The best one is highlighted with **Book with points ↗**, which opens Hilton's room selection with reward rates; hotels with only Premium Room Rewards or no reward rooms are listed under *Certificate not usable*. Its home card shows how many hotels are usable and the best value.
+- **Shared points request:** Free Night Finder uses the same points prices as Cash vs. Points, so having both on sends no extra requests. Point value and currency are shown while either of them is on.
+
 ## 0.4.1
 
 ### Changed

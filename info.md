@@ -1,9 +1,10 @@
 # Hilton Pro Tools
 
-Two tools for a normal search on hilton.com, in one small panel:
+Three tools for a normal search on hilton.com, in one small panel:
 
 - **Resort credit finder:** finds **Semi-Flex** rates with a **deposit required** at hotels that are eligible for the **Resort Credit**.
 - **Cash vs. points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
+- **Free night finder:** shows where a **Free Night Certificate** can be used (a **Standard Room Reward** is available for your dates) and where it is worth the most.
 
 The resort credit finder is built for holders of the Hilton Honors American Express Aspire card. The resort credit only applies at certain resorts and only to charges that are actually posted. Finding a matching rate by hand means opening every resort, every room type and every rate plan. This script does that for you.
 
@@ -15,6 +16,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 4. The panel opens on its home page: one card per tool with a live summary, the top find and the collapsed **Settings** (tool switches, shared settings). Click a card to open the tool; **‹** takes you back.
 5. **Resort Finder** shows the scan progress, an estimated time left and the queue of hotels, then each eligible resort with its cheapest matching rate. **View rates ↗** opens the room selection on Hilton for that hotel and your dates.
 6. **Cash vs. Points** lists every hotel of the search and shows whether paying with points or cash is cheaper.
+7. **Free Night Finder** ranks the hotels where a Free Night Certificate can be used by what one night is worth.
 
 ## What counts as a match?
 
@@ -35,11 +37,12 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 
 - **Resort Finder** card: how many hotels are eligible for the Resort Credit, how many were checked or can be retried, *Scanning hotel X of Y* during a scan, and *N matches* once something was found.
 - **Cash vs. Points** card: how often points win (for example *Points 4/6*) and the best value per point.
+- **Free Night Finder** card: how many hotels are usable for a certificate (for example *5 usable*) and the best value (for example *Best: ≈ €2,576 a night at …*).
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
 - **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
 - **Settings** (collapsed by default, click to open):
   - **Tools:** turn each tool on or off. A tool that is off has no card and sends no requests to Hilton; turning it back on catches up on the current search.
-  - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points is on.
+  - **Shared settings:** point value and currency for the points comparisons, shown while Cash vs. Points or Free Night Finder is on. Both tools share the same points request.
   - **Version:** the installed version and **Check for updates**. *Check for updates automatically* (on by default) looks for a new version a few seconds after a page loads, at most every 6 hours.
 - **Update available:** when a newer version is published, the home page shows what changed. **Install** opens it in your userscript manager and reloads the Hilton tab when you come back; **Skip this version** hides the notice until the next version.
 
@@ -92,13 +95,25 @@ The list is sorted by value per point, best first. Hotels without reward rooms f
 
 Prices are converted with the exchange rates from Hilton's currency converter.
 
+## Free night finder
+
+A Free Night Certificate (for example from the Aspire card) covers one night of a **Standard Room Reward**. The **Free Night Finder** page shows where that is possible for your dates:
+
+- Two tiles: how many hotels have a Standard Room Reward (for example *5 of 8*) and the best value per certificate.
+- **Value by:** rank by **Cash price** (the cheapest cash rate per night, what the certificate saves you if you'd otherwise pay cash) or **Points saved** (the points per night). The choice is saved.
+- The best hotel in a violet box with the value, the other side (points or cash) and **Book with points ↗**, which opens Hilton's room selection for your dates with reward rates. The other hotels follow with **Book ↗**.
+- **Certificate not usable:** hotels with only Premium Room Rewards (*Premium only*) or without reward rooms (*No reward rooms*). Hotels Hilton can't book are left out.
+- If no hotel has a Standard Room Reward, the page says so; try other dates.
+
+The finder uses Hilton's lowest points price for the whole stay. A single certificate night can still differ, so check it on Hilton before booking.
+
 ## How it works
 
 - **Read only:** The script observes Hilton's search requests (`/graphql/customer`) to get the hotel list and your search settings (dates, guests, rooms, currency). Hilton's responses are never modified.
 - **Room types:** For each eligible resort it requests the room types, sorted by price, cheapest first.
 - **Quick mode:** A hotel's scan stops at the first match. A full scan of every room type runs only when you click **Scan N more room types**.
 - **Gentle on the site:** About 0.85 s between requests, at most 40 eligible hotels per search and 25 room types per hotel.
-- **Points prices:** Hilton's search only returns points prices when you switch on "Use Points". The script requests them itself, once per page of search results.
+- **Points prices:** Hilton's search only returns points prices when you switch on "Use Points". The script requests them itself, once per page of search results, while Cash vs. Points or Free Night Finder is on. The rate plan name tells a Standard from a Premium Room Reward.
 - **Hotel names and exchange rates** come from Hilton's own map request and currency converter. The exchange rates are cached for 12 hours.
 - **New destination:** If you change the destination or dates, results are discarded and the page reloads once so the new search is captured cleanly.
 
@@ -106,7 +121,7 @@ Prices are converted with the exchange rates from Hilton's currency converter.
 
 - `@grant none`, runs on `www.hilton.com` only.
 - **No external servers.** All requests go to hilton.com only, using your existing browser session.
-- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency).
+- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking).
 - In the CSV export, cells that start with `=`, `+`, `-` or `@` get a leading `'`, so Excel and other spreadsheet apps don't run them as formulas.
 
 ## Notes and limitations
