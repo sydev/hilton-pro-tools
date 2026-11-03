@@ -10,7 +10,8 @@
 // done.png, home.png, home-settings.png, all-hotels.png, free-nights.png,
 // free-nights-points.png, split-idle.png, split-loading.png, split.png,
 // split-certificate.png, home-split.png, calendar-idle.png, calendar-loading.png, calendar.png,
-// calendar-points.png, home-calendar.png, minimized.png, home-points-off.png, home-update.png,
+// calendar-points.png, home-calendar.png, rates-idle.png, rates.png, rates-special.png,
+// rates-room.png, rates-sold-out.png, home-rates.png, minimized.png, home-points-off.png, home-update.png,
 // minimized-update.png and home-installing.png into the output folder.
 const fs = require('fs');
 const path = require('path');
@@ -99,19 +100,19 @@ const rooms = {
   MLEONWA: []
 };
 
-const rate = (code, name, amount, deposit) => ({
+const rate = (code, name, amount, deposit, extra = {}) => ({
   roomTypeCode: 'x',
   ratePlanCode: code,
   rateAmount: amount,
   // Stay total for 8 nights incl. ~17% tax, like Hilton's amountAfterTaxFmt.
   amountAfterTaxFmt: '$' + (amount * 8 * 1.17).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-  ratePlan: { ratePlanCode: code, ratePlanName: name, ratePlanDesc: '', advancePurchase: false },
+  ratePlan: { ratePlanCode: code, ratePlanName: name, ratePlanDesc: '', advancePurchase: Boolean(extra.advance) },
   guarantee: {
     depositRequired: deposit,
-    nonRefundable: false,
-    cxlPolicyDesc: 'Free cancellation until 7 days before arrival'
+    nonRefundable: Boolean(extra.advance),
+    cxlPolicyDesc: extra.advance ? 'Non-refundable once booked' : 'Free cancellation until 7 days before arrival'
   },
-  hhonorsDiscountRate: null
+  hhonorsDiscountRate: extra.honors || null
 });
 
 const POINTS = { MLEHICI: 120000, MLEAIHI: 95000, MLEGSQQ: 80000 };
@@ -215,13 +216,24 @@ function graphql(body) {
   }
 
   const room = v.selectedRoomTypeCode;
+  LOG.push(`rates ${code} ${room}` + (v.specialRates?.aaa ? ' aaa' : '') + (v.specialRates?.senior ? ' senior' : ''));
 
   if (code === 'MLEGSQQ' && room === 'DLX') {
     return { errors: [{ message: 'HTTP 429 Too Many Requests' }] };
   }
 
+  // Conrad has every kind of rate for the Rate Inspector; AAA and Senior only when asked for.
+  const scale = room === 'WTR' ? 1.4 : 1;
+  const conrad = [
+    rate('SFX1', 'Semi Flex Rate', 2480 * scale, true),
+    rate('SFX2', 'Semi Flex Breakfast', 2790 * scale, true),
+    rate('BAR', 'Best Available', 2300 * scale, false, { honors: rate('HHD', 'Honors Discount', 2185 * scale, false) }),
+    rate('APR', 'Advance Purchase', 1955 * scale, true, { advance: true }),
+    ...(v.specialRates?.aaa ? [rate('AAA', 'AAA Rate', 2070 * scale, false)] : []),
+    ...(v.specialRates?.senior ? [rate('SEN', 'Senior Rate', 2120 * scale, false)] : [])
+  ];
   const rates = code === 'MLEHICI'
-    ? [rate('SFX1', 'Semi Flex Rate', 2480, true), rate('SFX2', 'Semi Flex Breakfast', 2790, true), rate('BAR', 'Best Available', 2300, false)]
+    ? conrad
     : [rate('BAR', 'Best Available', 1500, false)];
 
   return {
@@ -356,6 +368,40 @@ function graphql(body) {
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home-calendar.png') });
 
+  // Rate Inspector: opens on the top find, whose room the scan already loaded.
+  const inspectorFrom = LOG.length;
+  await page.click('.hpt-tool[data-view="rates"]');
+  await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates-idle.png') });
+  console.log('rates idle:', await page.textContent('#hpt-rate-status'));
+  await page.click('#hpt-rate-load');
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates.png') });
+  console.log('rates:', await page.$$eval('#hpt-rates .hpt-rate-row', rows => rows.map(r => r.textContent.replace(/\s+/g, ' ').trim())));
+  await page.check('#hpt-rate-special');
+  console.log('rates special hint:', await page.textContent('#hpt-rate-status'));
+  await page.click('#hpt-rate-load');
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates-special.png') });
+  await page.selectOption('#hpt-rate-room', 'WTR');
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates-room.png') });
+  console.log('rates WTR stats:', (await page.textContent('#hpt-rates .hpt-stats')).replace(/\s+/g, ' ').trim());
+  await page.uncheck('#hpt-rate-special');
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-rates.png') });
+  // From Cash vs. Points: Canopy has no room types (1740).
+  await page.click('.hpt-tool[data-view="points"]');
+  await page.click('#hpt-all-list [data-inspect="MLECICI"]');
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates-sold-out.png') });
+  const reloadFrom = LOG.length;
+  await page.click('#hpt-rate-load');
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  console.log('rates sold out reload asks again:', LOG.length > reloadFrom);
+  console.log('requests (Rate Inspector):', LOG.slice(inspectorFrom).filter(x => !x.startsWith('shopMulti')));
+  await page.click('#hpt-back');
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -366,12 +412,12 @@ function graphql(body) {
   await panel.screenshot({ path: path.join(outDir, 'minimized.png') });
 
   console.log('status:', await page.textContent('#hpt-status'));
-  console.log('requests:', LOG.filter(x => !x.startsWith('hotel_')));
+  console.log('requests:', LOG.filter(x => !x.startsWith('hotel_') && !x.startsWith('rates ')));
 
-  // Cash vs. Points, Free Night Finder, Split Stay and Flexible Dates switched off: no points or currency requests.
+  // Cash vs. Points, Free Night Finder, Split Stay, Flexible Dates and Rate Inspector switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

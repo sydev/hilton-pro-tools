@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.7.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer and flexible dates calendar for Hilton searches
+// @version      0.8.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar and rate inspector for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.7.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer and flexible dates calendar for Hilton searches
+// @version      0.8.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar and rate inspector for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -40,6 +40,7 @@
   const SPLIT_CERTS_KEY = 'hilton-pro-tools-split-certificates';
   const CALENDAR_RANGE_KEY = 'hilton-pro-tools-calendar-range';
   const CALENDAR_MODE_KEY = 'hilton-pro-tools-calendar-mode';
+  const RATES_SPECIAL_KEY = 'hilton-pro-tools-rates-special';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -48,7 +49,8 @@
     points: 'Cash vs. Points',
     free: 'Free Night Finder',
     split: 'Split Stay',
-    calendar: 'Flexible Dates'
+    calendar: 'Flexible Dates',
+    rates: 'Rate Inspector'
   };
 
   // Description of each tool in the home page's on/off switches.
@@ -57,7 +59,8 @@
     points: 'Loads points prices and exchange rates',
     free: 'Finds Standard Room Rewards for Free Night Certificates',
     split: 'Mixes cash, points and certificates night by night',
-    calendar: 'Compares prices for nearby arrival dates'
+    calendar: 'Compares prices for nearby arrival dates',
+    rates: 'Shows every rate plan of one hotel side by side'
   };
 
   // Update check against the published script on GitHub.
@@ -125,7 +128,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true, split: true, calendar: true },
+    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -148,6 +151,12 @@
     calendarRange: CALENDAR.defaultShift,
     // Flexible Dates shows cash ('cash') or points ('points').
     calendarMode: 'cash',
+    // Rate Inspector: the hotel and room type being inspected, see inspectRates().
+    inspect: freshInspect(null),
+    // Hilton's rate plans by planKey(), from the scan or the Rate Inspector.
+    plans: new Map(),
+    // Rate Inspector also asks for AAA and Senior rates.
+    inspectSpecial: false,
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -186,6 +195,8 @@
     if (range >= 1) state.calendarRange = Math.min(CALENDAR.maxShift, range);
 
     if (localStorage.getItem(CALENDAR_MODE_KEY) === 'points') state.calendarMode = 'points';
+
+    state.inspectSpecial = localStorage.getItem(RATES_SPECIAL_KEY) === 'on';
 
     state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
     state.update.skipped = savedUpdate().skipped || null;
@@ -281,6 +292,8 @@
     state.extras = { points: new Set(), pending: 0, error: '' };
     state.split = freshSplit();
     state.calendar = freshCalendar();
+    state.inspect = freshInspect(null);
+    state.plans.clear();
  
     render();
     status(reason);
@@ -1376,8 +1389,9 @@
     };
   }
  
-  async function ask(query, values) {
-    if (state.scan) state.scan.requests++;
+  // counted: part of the scan, for its time estimate.
+  async function ask(query, values, counted = true) {
+    if (counted && state.scan) state.scan.requests++;
 
     const url = new URL(API, location.origin);
  
@@ -1599,6 +1613,9 @@
     if (!Array.isArray(rates) || !rates.length) {
       throw Error('Full rate plans not returned');
     }
+
+    // The Rate Inspector shows them without asking again.
+    state.plans.set(planKey(entry.code, room.roomTypeCode, ''), rates);
  
     for (const base of rates) {
       const offers = [
@@ -2874,6 +2891,23 @@
     .hpt-cal-sub { font-size: 12px; color: #475569; }
     .hpt-cal-row .hpt-tag { flex: none; white-space: nowrap; }
 
+    /* Rate Inspector page. */
+    .hpt-chip.rates { background: #fef9c3; color: #854d0e; }
+    .hpt-stat.rates { background: #fefce8; }
+    .hpt-stat.rates b, .hpt-stat.rates span { color: #854d0e; }
+    .hpt-stat.rates b { overflow-wrap: anywhere; }
+    .hpt-rate-pick { width: 100%; }
+    #hilton-pro-tools .hpt-rate-pick select { flex: 1; min-width: 0; max-width: none; }
+    .hpt-rate-pick > span:first-child { width: 42px; flex: none; }
+    #hilton-pro-tools .hpt-rate-special { flex-basis: auto; margin: 0; font-size: 12px; color: #334155; }
+    .hpt-rate-list { border-top: 1px solid #e2e8f0; }
+    .hpt-rate-row { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 4px; }
+    .hpt-rate-row .hpt-row > b { font-size: 13px; white-space: nowrap; }
+    .hpt-rate-row .hpt-free-sub { align-items: center; }
+    .hpt-rate-markup { font-weight: 600; color: #475569; white-space: nowrap; }
+    .hpt-rate-markup.low { color: #166534; }
+    .hpt-rate-cxl { font-size: 12px; color: #475569; }
+
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
     .hpt-tools { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -2907,6 +2941,7 @@
     .hpt-tool-icon.free { background: #ede9fe; color: #5b21b6; }
     .hpt-tool-icon.split { background: #ffedd5; color: #9a3412; }
     .hpt-tool-icon.calendar { background: #ffe4e6; color: #9f1239; }
+    .hpt-tool-icon.rates { background: #fef9c3; color: #854d0e; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -3109,6 +3144,7 @@
     free: svg(20, '<path d="M4 5h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6V6a1 1 0 0 1 1-1z"/><path d="M14 5v2M14 11v2M14 17v2"/>'),
     split: svg(20, '<path d="M3 12h6l4-5h8"/><path d="M13 17h8"/><path d="M9 12l4 5"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>'),
     dates: svg(20, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/>'),
+    rates: svg(20, '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -3616,6 +3652,7 @@
                   target="_blank"
                   rel="noopener noreferrer"
                 >View rates ↗</a>
+                ${inspectButton(hotel.code)}
               </div>
             ` : ''}
           </div>
@@ -4483,6 +4520,9 @@
     state.panel.querySelector('.hpt-tool[data-view="calendar"]')
       .setAttribute('aria-busy', String(state.calendar.status === 'loading'));
 
+    state.panel.querySelector('.hpt-tool[data-view="rates"]')
+      .setAttribute('aria-busy', String(state.inspect.status === 'loading'));
+
     $('hpt-settings-sum').textContent = valued
       ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
         `${state.pointValue} ct · ${state.currency}`
@@ -4590,6 +4630,31 @@
                 `${calendarAmount(calendarTop.prices[calendarTop.best])} a night at ${calendarTop.name}`
               : 'No prices on these dates'));
 
+    const inspect = state.inspect;
+    const inspected = inspect.status === 'done' && inspect.code ? inspectPlans() : null;
+
+    $('hpt-rates-chip').textContent = inspected?.plans.length
+      ? `${inspected.plans.length} ${plural(inspected.plans.length, 'rate', 'rates')}`
+      : '';
+
+    $('hpt-rates-sub').textContent = !s
+      ? 'Waiting for a search'
+      : !state.hotels.size
+        ? 'Waiting for hotels'
+        : inspect.status === 'loading'
+          ? `Loading rates of ${hotelName(inspect.code)}…`
+          : inspect.status === 'failed'
+            ? `Could not load rates of ${hotelName(inspect.code)}`
+            : inspect.unavailable
+              ? `${hotelName(inspect.code)}: no bookable rates`
+              : inspected?.plans.length
+                ? `${hotelName(inspect.code)}: ` + (inspected.flexibility === null
+                    ? 'no refundable rate'
+                    : inspected.flexibility === 0
+                      ? 'cheapest rate is refundable'
+                      : `refundable ${percent(inspected.flexibility)} over cheapest`)
+                : 'Pick a hotel to compare its rate plans';
+
     const top = state.tools.resort && topFind();
 
     $('hpt-top').hidden = !top;
@@ -4650,6 +4715,11 @@
         clearTimeout(autoTimer);
         state.stop = true;
       }
+    }
+
+    // Switched off while loading: drop the half loaded inspection.
+    if (tool === 'rates' && !on && state.inspect.status === 'loading') {
+      state.inspect = freshInspect(state.inspect.code);
     }
 
     if ((tool === 'points' || tool === 'free') && on && state.search) {
@@ -4730,6 +4800,7 @@
     renderFree();
     renderSplit();
     renderCalendar();
+    renderRates();
 
     const root = $('hpt-results');
 
@@ -4871,6 +4942,8 @@
                 rel="noopener noreferrer"
               >View rates ↗</a>
             ` : ''}
+
+            ${entry.unavailable ? '' : inspectButton(entry.code)}
 
             ${!entry.unavailable && remaining > 0 ? `
               <button
@@ -5244,6 +5317,485 @@
   }
 
   // =====================================
+  // Rate Inspector
+  // =====================================
+
+  // Special rates the Rate Inspector can ask for on top, as keys of specialRates.
+  const SPECIALS = ['aaa', 'senior'];
+
+  const planKey = (code, room, special) => `${code}|${room}|${special}`;
+
+  // status: idle, loading, done or failed; rooms come from the scan or one room type request.
+  function freshInspect(code) {
+    return {
+      code,
+      status: 'idle',
+      rooms: null,
+      codeUsed: null,
+      cache: null,
+      room: null,
+      unavailable: false,
+      error: '',
+      issues: []
+    };
+  }
+
+  const inspectSpecials = () => ['', ...(state.inspectSpecial ? SPECIALS : [])];
+
+  // Hotels the Rate Inspector can pick, by name.
+  function inspectOptions() {
+    return [...state.hotels.values()]
+      .filter(hotel => hotel.bookable !== false)
+      .map(hotel => ({ code: hotel.code, name: hotelName(hotel.code) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // The chosen hotel, else the top Semi-Flex find, else the first hotel.
+  function inspectHotel() {
+    const code = state.inspect.code;
+    if (code && state.hotels.has(code)) return code;
+
+    return topFind()?.entry.code || inspectOptions()[0]?.code || null;
+  }
+
+  // Requests inspectRates() still needs for the chosen hotel and room type.
+  function inspectRequests() {
+    const code = inspectHotel();
+    if (!code) return 0;
+
+    const inspect = state.inspect.code === code ? state.inspect : freshInspect(code);
+    const scanned = state.results.get(code);
+    const rooms = inspect.rooms || scanned?.rooms;
+    const room = inspect.room || rooms?.[0]?.roomTypeCode;
+
+    if (inspect.unavailable || scanned?.unavailable) return 0;
+
+    return (rooms ? 0 : 1) + inspectSpecials().filter(special =>
+      !room || !state.plans.has(planKey(code, room, special))
+    ).length;
+  }
+
+  // Loads the room types of a hotel (unless the scan has them) and every rate plan of one room type.
+  async function inspectRates(code = inspectHotel(), room = null) {
+    if (
+      !state.tools.rates ||
+      !state.search ||
+      !code ||
+      !state.hotels.has(code) ||
+      state.inspect.status === 'loading'
+    ) return;
+
+    const generation = state.generation;
+    const inspect = state.inspect.code === code ? state.inspect : freshInspect(code);
+
+    // Everything already loaded: ask again.
+    if (!room && inspect.status === 'done' && !inspectRequests()) {
+      if (inspect.unavailable && !state.results.get(code)?.unavailable) {
+        Object.assign(inspect, freshInspect(code));
+      }
+
+      for (const special of inspectSpecials()) {
+        state.plans.delete(planKey(code, inspect.room, special));
+      }
+    }
+
+    inspect.status = 'loading';
+    inspect.error = '';
+    inspect.issues = [];
+    state.inspect = inspect;
+    render();
+
+    const current = () =>
+      generation === state.generation && state.inspect === inspect;
+
+    let sent = 0;
+
+    const send = async values => {
+      if (sent++) await sleep(CONFIG.delay);
+      if (!current()) throw Error('cancelled');
+
+      return ask(values.selectedRoomTypeCode ? FULL : QUICK, values, false);
+    };
+
+    try {
+      const scanned = state.results.get(code);
+
+      if (!inspect.rooms && scanned?.unavailable) inspect.unavailable = true;
+
+      if (!inspect.rooms && scanned?.rooms) {
+        inspect.rooms = scanned.rooms;
+        inspect.codeUsed = scanned.codeUsed;
+        inspect.cache = scanned.cache;
+      }
+
+      // Like the scan, try the 5-letter code too.
+      const aliases = [...new Set([code, ...(code.length > 5 ? [code.slice(0, 5)] : [])])];
+
+      for (const alias of aliases) {
+        if (inspect.rooms || inspect.unavailable) break;
+
+        const cache = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+        const result = await send(variables(alias, null, cache));
+
+        if (!current()) return;
+
+        if (result.unavailable) {
+          inspect.unavailable = alias === aliases[aliases.length - 1];
+          continue;
+        }
+
+        const rooms = (result.shopAvail.roomTypes || [])
+          .filter(item => item.roomTypeCode)
+          .sort((a, b) => referencePrice(a) - referencePrice(b));
+
+        if (result.ctyhocn === code && rooms.length) {
+          inspect.rooms = rooms.slice(0, CONFIG.maxRooms);
+          inspect.codeUsed = alias;
+          inspect.cache = cache;
+        }
+      }
+
+      if (!inspect.rooms) {
+        if (!inspect.unavailable) throw Error('No bookable room types found');
+
+        inspect.status = 'done';
+        render();
+        return;
+      }
+
+      inspect.room = room || inspect.room || inspect.rooms[0].roomTypeCode;
+
+      for (const special of inspectSpecials()) {
+        const key = planKey(code, inspect.room, special);
+        if (state.plans.has(key)) continue;
+
+        const values = variables(inspect.codeUsed, inspect.room, inspect.cache);
+        if (special) values.specialRates = { ...values.specialRates, [special]: true };
+
+        try {
+          const result = await send(values);
+          if (!current()) return;
+
+          const selected = result.unavailable
+            ? null
+            : (result.shopAvail.roomTypes || []).find(
+                item => item.roomTypeCode === inspect.room
+              );
+
+          state.plans.set(key, selected?.roomOnlyRates || []);
+
+        } catch (error) {
+          if (!current()) return;
+          if (!special) throw error;
+
+          inspect.issues.push(`${special.toUpperCase()}: ${error.message}`);
+        }
+      }
+
+      inspect.status = 'done';
+
+    } catch (error) {
+      if (!current()) return;
+
+      inspect.status = 'failed';
+      inspect.error = error.message;
+    }
+
+    render();
+  }
+
+  // Hilton's rate plans flattened: the Honors discount of a rate is a plan of its own.
+  function ratePlans(rates) {
+    const plans = [];
+
+    for (const base of rates || []) {
+      const offers = [
+        [base, null],
+        ...(base?.hhonorsDiscountRate ? [[base.hhonorsDiscountRate, base]] : [])
+      ];
+
+      for (const [rate, parent] of offers) {
+        if (!rate) continue;
+
+        const plan = rate.ratePlan || {};
+        const parentPlan = parent?.ratePlan || {};
+        const guarantee = rate.guarantee || {};
+        const parentGuarantee = parent?.guarantee || {};
+        const code = rate.ratePlanCode || plan.ratePlanCode || '';
+
+        plans.push({
+          code,
+          name: plan.ratePlanName || parentPlan.ratePlanName || code || 'Rate',
+          description: plan.ratePlanDesc || parentPlan.ratePlanDesc || '',
+          honors: Boolean(parent),
+          // Nightly rate in the search currency; price is Hilton's formatted total after tax.
+          amount: Number.isFinite(rate.rateAmount) ? rate.rateAmount : null,
+          price: rate.amountAfterTaxFmt || '',
+          deposit: (guarantee.depositRequired ?? parentGuarantee.depositRequired) === true,
+          nonRefundable: (guarantee.nonRefundable ?? parentGuarantee.nonRefundable) === true,
+          advance: (plan.advancePurchase ?? parentPlan.advancePurchase) === true,
+          cancellation: guarantee.cxlPolicyDesc || parentGuarantee.cxlPolicyDesc || '',
+          guarantee: guarantee.guarPolicyDesc || parentGuarantee.guarPolicyDesc || ''
+        });
+      }
+    }
+
+    return plans;
+  }
+
+  // What kind of rate a plan is, from its flags and name, or ''.
+  function rateKind(plan) {
+    const text = `${plan.name} ${plan.description}`;
+
+    if (/\baaa\b/i.test(text)) return 'AAA';
+    if (/senior/i.test(text)) return 'Senior';
+    if (plan.advance || /advance purchase/i.test(text)) return 'Advance Purchase';
+    if (/semi[\s-]*flex/i.test(text)) return 'Semi-Flex';
+    if (plan.honors || /honors discount/i.test(text)) return 'Honors discount';
+    if (/flex|best available/i.test(text)) return 'Flex';
+
+    return '';
+  }
+
+  // The same rule as the Resort Finder scan.
+  const creditRate = plan =>
+    /semi[\s-]*flex/i.test(`${plan.name} ${plan.description}`) &&
+    plan.deposit &&
+    !plan.nonRefundable &&
+    !plan.advance;
+
+  // Every rate plan of the inspected room type, cheapest first, with its markup over the cheapest.
+  function inspectPlans() {
+    const inspect = state.inspect;
+    if (!inspect.room) return null;
+
+    const lists = inspectSpecials()
+      .map(special => state.plans.get(planKey(inspect.code, inspect.room, special)))
+      .filter(Boolean);
+
+    if (!lists.length) return null;
+
+    const seen = new Set();
+    const plans = [];
+
+    for (const plan of lists.flatMap(ratePlans)) {
+      const key = `${plan.code}|${plan.name}|${plan.honors}`;
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+      plans.push({ ...plan, kind: rateKind(plan) });
+    }
+
+    plans.sort((a, b) =>
+      (a.amount ?? Infinity) - (b.amount ?? Infinity) ||
+      a.name.localeCompare(b.name)
+    );
+
+    const low = plans.find(plan => plan.amount)?.amount ?? null;
+    const markup = plan => low && plan.amount ? Math.round((plan.amount - low) / low * 100) : null;
+    const refundable = plans.find(plan => !plan.nonRefundable && !plan.advance && plan.amount);
+
+    return {
+      plans: plans.map(plan => ({ ...plan, markup: markup(plan) })),
+      cheapest: plans[0] || null,
+      refundable: refundable || null,
+      // What flexibility costs here: cheapest refundable rate over the cheapest rate.
+      flexibility: refundable ? markup(refundable) : null
+    };
+  }
+
+  // Opens the Rate Inspector on a hotel, e.g. from Resort Finder or Cash vs. Points.
+  function openInspector(code) {
+    if (!state.tools.rates || !state.hotels.has(code)) return;
+
+    if (state.inspect.code !== code && state.inspect.status !== 'loading') {
+      state.inspect = freshInspect(code);
+    }
+
+    showView('rates');
+    inspectRates(code);
+  }
+
+  const inspectButton = code => state.tools.rates
+    ? `<button type="button" class="hpt-link-btn" data-inspect="${html(code)}">Inspect rates</button>`
+    : '';
+
+  const percent = value => `${value > 0 ? '+' : ''}${value} %`;
+
+  function renderRates() {
+    const root = $('hpt-rates');
+    const inspect = state.inspect;
+    const code = inspectHotel();
+    const options = inspectOptions();
+    const loading = inspect.status === 'loading';
+    const shown = inspect.code === code ? inspect : freshInspect(code);
+
+    $('hpt-rates-controls').hidden = !state.search || !options.length;
+
+    const hotels = $('hpt-rate-hotel');
+    const key = options.map(option => `${option.code}:${option.name}`).join(',');
+
+    if (hotels.dataset.key !== key) {
+      hotels.dataset.key = key;
+      hotels.innerHTML = options.map(option =>
+        `<option value="${html(option.code)}">${html(option.name)}</option>`
+      ).join('');
+    }
+
+    if (document.activeElement !== hotels && code) hotels.value = code;
+    hotels.disabled = loading;
+
+    const rooms = $('hpt-rate-room');
+    const roomKey = `${shown.code}|${(shown.rooms || []).map(room => room.roomTypeCode).join(',')}`;
+
+    $('hpt-rate-room-pick').hidden = !shown.rooms;
+
+    if (rooms.dataset.key !== roomKey) {
+      rooms.dataset.key = roomKey;
+      rooms.innerHTML = (shown.rooms || []).map(room => `
+        <option value="${html(room.roomTypeCode)}">
+          ${html(room.roomTypeName || room.roomTypeCode)}
+        </option>
+      `).join('');
+    }
+
+    if (document.activeElement !== rooms && shown.room) rooms.value = shown.room;
+    rooms.disabled = loading;
+
+    $('hpt-rate-special').checked = state.inspectSpecial;
+
+    const requests = inspectRequests();
+
+    $('hpt-rate-load').disabled = loading;
+    $('hpt-rate-label').textContent =
+      shown.status === 'done' && !requests ? 'Reload rates' : 'Inspect rates';
+
+    if (!state.search || !options.length) {
+      $('hpt-rate-status').textContent = '';
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>${state.search ? 'Waiting for hotels' : 'Waiting for a Hilton search'}</b>
+          <p>Search a destination and dates on Hilton.</p>
+        </div>
+      `;
+      return;
+    }
+
+    if (loading) {
+      $('hpt-rate-status').textContent = 'Loading rate plans…';
+      root.innerHTML = '';
+      return;
+    }
+
+    if (shown.status === 'failed') {
+      $('hpt-rate-status').textContent = `Could not load rates: ${shown.error}`;
+      root.innerHTML = '';
+      return;
+    }
+
+    if (shown.unavailable) {
+      $('hpt-rate-status').textContent = '';
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.rates}</div>
+          <b>No bookable rates for these dates</b>
+          <p>Hilton reports this hotel as sold out (1740). Try other dates.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const result = shown.status === 'done' ? inspectPlans() : null;
+
+    if (!result) {
+      $('hpt-rate-status').textContent = requests
+        ? `Sends ${requests} ${plural(requests, 'request', 'requests')} to Hilton ` +
+          '(room types, then the rates of one room type).'
+        : 'Already loaded by Resort Finder; sends no requests.';
+      root.innerHTML = '';
+      return;
+    }
+
+    $('hpt-rate-status').textContent = [
+      ...shown.issues,
+      requests
+        ? `Inspect rates adds AAA and Senior: ${requests} more ${plural(requests, 'request', 'requests')}`
+        : ''
+    ].filter(Boolean).join(' · ');
+
+    if (!result.plans.length) {
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.rates}</div>
+          <b>No rates for this room type</b>
+          <p>Pick another room type.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const resort = Boolean(state.resorts?.has(shown.code));
+    const { cheapest, flexibility } = result;
+
+    root.innerHTML = `
+      <div class="hpt-split-stats">
+        <div class="hpt-stats">
+          <div class="hpt-stat rates">
+            <b>${html(cheapest.price || String(cheapest.amount ?? '–'))}</b>
+            <span>cheapest · ${html(cheapest.kind || cheapest.name)}</span>
+          </div>
+          <div class="hpt-stat${flexibility === 0 ? ' good' : ''}">
+            <b>${flexibility === null ? '–' : html(percent(flexibility))}</b>
+            <span>${flexibility === null
+              ? 'no refundable rate'
+              : flexibility === 0
+                ? 'cheapest rate is refundable'
+                : 'for a refundable rate'}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hpt-rate-list">
+        ${result.plans.map(plan => `
+          <div class="hpt-rate-row">
+            <div class="hpt-row">
+              <span class="hpt-name">${html(plan.name)}</span>
+              <b>${html(plan.price || String(plan.amount ?? ''))}</b>
+            </div>
+            <div class="hpt-free-sub">
+              <span class="hpt-all-meta">
+                ${plan.kind ? `<span class="hpt-chip rates">${html(plan.kind)}</span>` : ''}
+                ${plan.honors && plan.kind !== 'Honors discount' ? '<span class="hpt-chip points">Honors discount</span>' : ''}
+                <span class="hpt-chip ${plan.nonRefundable || plan.advance ? 'split' : 'cash'}">
+                  ${plan.nonRefundable || plan.advance ? 'Non-refundable' : 'Refundable'}
+                </span>
+                ${plan.deposit ? '<span class="hpt-chip muted">Deposit</span>' : ''}
+                ${resort && creditRate(plan) ? '<span class="hpt-tag">Resort Credit</span>' : ''}
+              </span>
+              <span class="hpt-rate-markup${plan.markup === 0 ? ' low' : ''}">
+                ${plan.markup === null ? '' : plan.markup === 0 ? 'Cheapest' : html(percent(plan.markup))}
+              </span>
+            </div>
+            ${plan.cancellation ? `<div class="hpt-rate-cxl">${html(plan.cancellation)}</div>` : ''}
+            <span class="hpt-code">${html(plan.code)}</span>
+          </div>
+        `).join('')}
+      </div>
+
+      <div class="hpt-controls">
+        <div class="hpt-links">
+          <a
+            href="${html(rateURL(state.results.get(shown.code) || state.hotels.get(shown.code)))}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >View rates on Hilton ↗</a>
+        </div>
+      </div>
+    `;
+  }
+
+  // =====================================
   // CSV export
   // =====================================
  
@@ -5476,6 +6028,18 @@
               </span>
               ${ICON.chevron}
             </button>
+
+            <button class="hpt-tool" type="button" data-view="rates">
+              <span class="hpt-tool-icon rates">${ICON.rates}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Rate Inspector</b>
+                  <span id="hpt-rates-chip" class="hpt-chip rates"></span>
+                </span>
+                <span id="hpt-rates-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
           </div>
 
           <div id="hpt-top" class="hpt-section" hidden>
@@ -5566,6 +6130,21 @@
                   role="switch"
                   data-tool="calendar"
                   aria-label="Flexible Dates"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small rates">${ICON.rates}</span>
+                <span class="hpt-tool-text">
+                  <b>Rate Inspector</b>
+                  <span id="hpt-rates-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="rates"
+                  aria-label="Rate Inspector"
                 >
               </label>
 
@@ -5770,6 +6349,47 @@
             use <b>Search these dates</b> and let Resort Finder scan them.
           </div>
         </div>
+
+        <div id="hpt-view-rates" hidden>
+          <div id="hpt-rates-controls" class="hpt-controls">
+            <div class="hpt-free-intro">
+              Every rate plan of one room type side by side, with deposit, cancellation
+              and what it costs over the cheapest rate.
+            </div>
+
+            <label class="hpt-settings hpt-rate-pick">
+              <span>Hotel</span>
+              <select id="hpt-rate-hotel" aria-label="Hotel to inspect"></select>
+            </label>
+
+            <label id="hpt-rate-room-pick" class="hpt-settings hpt-rate-pick" hidden>
+              <span>Room</span>
+              <select id="hpt-rate-room" aria-label="Room type to inspect"></select>
+            </label>
+
+            <div class="hpt-split-pick">
+              <label class="hpt-version-auto hpt-rate-special">
+                <input id="hpt-rate-special" type="checkbox">
+                AAA and Senior rates too
+              </label>
+
+              <button id="hpt-rate-load" class="hpt-primary" type="button">
+                ${ICON.refresh}
+                <span id="hpt-rate-label" class="hpt-idle">Inspect rates</span>
+                <span class="hpt-busy">Loading…</span>
+              </button>
+            </div>
+
+            <div id="hpt-rate-status" class="hpt-hint"></div>
+          </div>
+
+          <div id="hpt-rates"></div>
+
+          <div class="hpt-footer">
+            Rates as Hilton's room selection returns them for your dates, without Points &amp; Money.
+            Markup compares the nightly rate. AAA and Senior rates need a membership or ID at check-in.
+          </div>
+        </div>
       </div>
     `;
 
@@ -5815,12 +6435,31 @@
 
       const mode = event.target.closest('[data-cal-mode]')?.dataset.calMode;
       if (mode) setCalendarMode(mode);
+
+      const inspect = event.target.closest('[data-inspect]')?.dataset.inspect;
+      if (inspect) openInspector(inspect);
     });
 
     $('hpt-split-load').onclick = loadSplit;
     $('hpt-certs').onchange = event => setCertificates(event.target.value);
     $('hpt-cal-load').onclick = loadCalendar;
     $('hpt-cal-range').onchange = event => setCalendarRange(event.target.value);
+
+    $('hpt-rate-load').onclick = () => inspectRates();
+    $('hpt-rate-hotel').onchange = event => {
+      state.inspect = freshInspect(event.target.value);
+      render();
+    };
+    $('hpt-rate-room').onchange = event => inspectRates(state.inspect.code, event.target.value);
+    $('hpt-rate-special').onchange = event => {
+      state.inspectSpecial = event.target.checked;
+
+      try {
+        localStorage.setItem(RATES_SPECIAL_KEY, state.inspectSpecial ? 'on' : 'off');
+      } catch {}
+
+      render();
+    };
 
     $('hpt-update-auto').onchange = event => {
       state.update.auto = event.target.checked;

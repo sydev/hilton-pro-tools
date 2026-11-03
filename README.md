@@ -1,12 +1,13 @@
 # Hilton Pro Tools
 
-A userscript that adds a small panel to search results on [hilton.com](https://www.hilton.com) with five tools:
+A userscript that adds a small panel to search results on [hilton.com](https://www.hilton.com) with six tools:
 
 - **Resort Finder:** finds **Semi-Flex** rates with a **deposit required** at hotels on Hilton's official [Resort Credit list](https://www.hilton.com/en/p/hilton-honors/resort-credit-eligible-hotels/), built for holders of the Hilton Honors American Express Aspire card.
 - **Cash vs. Points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
 - **Free Night Finder:** shows where a Free Night Certificate can be used (Standard Room Reward available) and where it is worth the most.
 - **Split Stay:** finds the cheapest mix of cash nights, points nights and Free Night Certificates for your stay, also with one hotel change.
 - **Flexible Dates:** compares the same stay with the arrival up to 3 days earlier or later, as a hotel × arrival day calendar in cash or points.
+- **Rate Inspector:** shows every rate plan of one hotel side by side, with deposit, cancellation and the markup over the cheapest rate.
 
 Each tool can be turned off under **Settings** on the panel's home page; a tool that is off sends no requests. All tool requests go to hilton.com with your own session. The only other request is the update check, which reads the script header and `changelog.md` from this repository on GitHub without cookies; it can be turned off under **Settings**.
 
@@ -44,7 +45,7 @@ Then pin Tampermonkey to the toolbar (puzzle icon → pin) so you can see when i
 
 1. Open <https://www.hilton.com> (reload any tab that was already open).
 2. Search for a destination and dates as usual, for example "Maldives".
-3. The **Hilton Pro Tools** panel appears in the top right. Once the results load, the Resort Finder starts scanning automatically, Cash vs. Points loads the points prices and Free Night Finder ranks the hotels for your certificates. Split Stay loads nightly prices when you click **Load nightly prices**, Flexible Dates loads other arrival days when you click **Load other dates**.
+3. The **Hilton Pro Tools** panel appears in the top right. Once the results load, the Resort Finder starts scanning automatically, Cash vs. Points loads the points prices and Free Night Finder ranks the hotels for your certificates. Split Stay loads nightly prices when you click **Load nightly prices**, Flexible Dates loads other arrival days when you click **Load other dates**, Rate Inspector loads a hotel's rate plans when you click **Inspect rates**.
 
 ### Updates
 

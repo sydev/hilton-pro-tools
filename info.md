@@ -1,12 +1,13 @@
 # Hilton Pro Tools
 
-Five tools for a normal search on hilton.com, in one small panel:
+Six tools for a normal search on hilton.com, in one small panel:
 
 - **Resort credit finder:** finds **Semi-Flex** rates with a **deposit required** at hotels that are eligible for the **Resort Credit**.
 - **Cash vs. points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
 - **Free night finder:** shows where a **Free Night Certificate** can be used (a **Standard Room Reward** is available for your dates) and where it is worth the most.
 - **Split stay:** finds the cheapest mix of **cash nights, points nights and Free Night Certificates** for your stay, also with one hotel change.
 - **Flexible dates:** compares the same stay with the arrival **a few days earlier or later**, as a hotel × arrival day calendar in cash or points.
+- **Rate inspector:** shows **every rate plan** of a hotel side by side, with deposit, cancellation and the markup over the cheapest rate.
 
 The resort credit finder is built for holders of the Hilton Honors American Express Aspire card. The resort credit only applies at certain resorts and only to charges that are actually posted. Finding a matching rate by hand means opening every resort, every room type and every rate plan. This script does that for you.
 
@@ -21,6 +22,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 7. **Free Night Finder** ranks the hotels where a Free Night Certificate can be used by what one night is worth.
 8. **Split Stay** prices every night of the stay on demand and shows the cheapest mix of cash, points and certificates.
 9. **Flexible Dates** prices the stay on nearby arrival days on demand and shows which day is cheapest at each hotel.
+10. **Rate Inspector** shows every rate plan of one hotel and room type, with what flexibility costs there.
 
 ## What counts as a match?
 
@@ -44,6 +46,7 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Free Night Finder** card: how many hotels are usable for a certificate (for example *5 usable*) and the best value (for example *Best: ≈ €2,576 a night at …*).
 - **Split Stay** card: before loading, how many requests it would send; afterwards the cheapest stay (for example *Best: ≈ €1,067 · 6 cash · 2 points*) and what it saves (for example *−€313*).
 - **Flexible Dates** card: before loading, how many requests it would send; afterwards the cheapest arrival (for example *Best: arrive Feb 19 · ≈ €90 a night at …*) and what it saves against your dates (for example *−€180*).
+- **Rate Inspector** card: the inspected hotel and what a refundable rate costs over the cheapest (for example *Conrad …: refundable +12 % over cheapest*), with the number of rates.
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
 - **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
 - **Settings** (collapsed by default, click to open):
@@ -71,6 +74,7 @@ Two tiles show how many hotels are eligible for the Resort Credit and how many h
 | **Trash icon** | Clears all results (then run the Hilton search again) |
 | **Auto scan after search results** | Switch: scans automatically once results load (setting is saved) |
 | **Scan N more** | Checks the remaining room types of a hotel too |
+| **Inspect rates** | Opens the Rate Inspector on that hotel (also in Cash vs. Points) |
 
 ### While scanning
 
@@ -143,6 +147,19 @@ Hotels often cost noticeably less, or open up reward rooms, when you arrive a da
 - **Calendar:** one row per hotel, cheapest first, with a cell per arrival day: the cheapest day is highlighted (green for cash, blue for points), your dates are outlined, *–* means sold out or no reward rooms. Click a price to open Hilton's rates for that hotel and those dates. Resort credit hotels are marked.
 - Hotels without a price on any of the days are listed at the end.
 
+## Rate inspector
+
+Hilton's room selection shows many rate plans per room, but not how they compare. The **Rate Inspector** puts them side by side:
+
+- **Hotel** and **Room:** any hotel of the search and its room types, cheapest first. **Inspect rates** in Resort Finder or Cash vs. Points opens the inspector on that hotel right away.
+- **Inspect rates:** one request for the room types and one for the rates of the room type (the page says how many before you click). Room types and rates Resort Finder already scanned are shown without a request. Changing the room loads its rates; **Reload rates** asks again.
+- **AAA and Senior rates too:** also asks for AAA and Senior rates, one request each (saved). They need a membership or ID at check-in.
+- **Two tiles:** the cheapest rate, and what the cheapest refundable rate costs on top (for example *+12 %*: what flexibility costs here).
+- **Every rate**, cheapest first: name, Hilton's total price, its kind (*Flex*, *Semi-Flex*, *Advance Purchase*, *Honors discount*, *AAA*, *Senior*), *Refundable* or *Non-refundable*, *Deposit*, the markup over the cheapest nightly rate, the cancellation policy and the rate code. Rates that meet the Resort Finder rule at a Resort Credit hotel are marked *Resort Credit*.
+- **View rates on Hilton ↗** opens the room selection for the hotel and your dates.
+
+Points & Money rates are not included.
+
 ## How it works
 
 - **Read only:** The script observes Hilton's search requests (`/graphql/customer`) to get the hotel list and your search settings (dates, guests, rooms, currency). Hilton's responses are never modified.
@@ -152,6 +169,7 @@ Hotels often cost noticeably less, or open up reward rooms, when you arrive a da
 - **Points prices:** Hilton's search only returns points prices when you switch on "Use Points". The script requests them itself, once per page of search results, while Cash vs. Points or Free Night Finder is on. The rate plan name tells a Standard from a Premium Room Reward.
 - **Nightly prices:** Split Stay asks for cash and points prices one night at a time, only when you click **Load nightly prices**, with the same pause between requests as the scan.
 - **Other dates:** Flexible Dates asks for cash and points prices of the moved stays only when you click **Load other dates**, with the same pause between requests.
+- **Rate plans:** the Rate Inspector asks for one hotel at a time, only when you click **Inspect rates** or change the room, and reuses what Resort Finder already loaded.
 - **Hotel names and exchange rates** come from Hilton's own map request and currency converter. The exchange rates are cached for 12 hours.
 - **New destination:** If you change the destination or dates, results are discarded and the page reloads once so the new search is captured cleanly.
 
@@ -159,7 +177,7 @@ Hotels often cost noticeably less, or open up reward rooms, when you arrive a da
 
 - `@grant none`, runs on `www.hilton.com` only.
 - **No external servers.** All requests go to hilton.com only, using your existing browser session.
-- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view).
+- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view, Rate Inspector's AAA and Senior choice).
 - In the CSV export, cells that start with `=`, `+`, `-` or `@` get a leading `'`, so Excel and other spreadsheet apps don't run them as formulas.
 
 ## Notes and limitations

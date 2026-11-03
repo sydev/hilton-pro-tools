@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- **Rate Inspector:** a sixth tool that shows every rate plan of one room type side by side: Flex, Semi-Flex, Advance Purchase, Honors discount and more, each with its price, *Refundable* or *Non-refundable*, *Deposit*, the cancellation policy and its markup over the cheapest rate (for example *+12 %*). Two tiles show the cheapest rate and what a refundable rate costs on top. Resort Credit rates (the Resort Finder rule) are marked.
+- **Pick a hotel and room:** *Hotel* lists every hotel of the search, *Room* its room types, cheapest first. **Inspect rates** sends one request for the room types and one for the rates; rooms and rates Resort Finder already scanned need no request. Changing the room loads its rates.
+- **AAA and Senior rates too:** asks for those special rates as well (two more requests, saved).
+- **Inspect rates** links in Resort Finder and Cash vs. Points open the Rate Inspector on that hotel.
+- **Rate Inspector card and switch:** the home card shows the inspected hotel and what flexibility costs there; Settings has its on/off switch. It sends nothing until you click **Inspect rates**.
+
 ## 0.7.0
 
 ### Added
