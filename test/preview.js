@@ -9,7 +9,8 @@
 // writes home-scanning.png, scanning.png, minimized-scanning.png, done-no-fx.png,
 // done.png, home.png, home-settings.png, all-hotels.png, free-nights.png,
 // free-nights-points.png, split-idle.png, split-loading.png, split.png,
-// split-certificate.png, home-split.png, minimized.png, home-points-off.png, home-update.png,
+// split-certificate.png, home-split.png, calendar-idle.png, calendar-loading.png, calendar.png,
+// calendar-points.png, home-calendar.png, minimized.png, home-points-off.png, home-update.png,
 // minimized-update.png and home-installing.png into the output folder.
 const fs = require('fs');
 const path = require('path');
@@ -123,12 +124,24 @@ const NIGHTLY = {
   MLECICI: { cash: [120, 120, 130, 180, 300, 320, 200, 130], points: Array(8).fill(60000) },
   MLEHXHX: { cash: [100, 100, 110, 160, 420, 450, 160, 110], points: Array(8).fill(null) }
 };
+// Flexible Dates: the 8-night stay moved by N days costs this share of the searched one.
+// Arriving 2 days earlier is cheapest in cash, 1 day later on points; Canopy is sold out 2 days later.
+const SHIFT = {
+  '-3': { cash: 1.1, points: 1 },
+  '-2': { cash: 0.8, points: 1 },
+  '-1': { cash: 0.92, points: 1.1 },
+  '1': { cash: 1.05, points: 0.85 },
+  '2': { cash: 1.25, points: 1.2 },
+  '3': { cash: 0.95, points: 1 }
+};
 const nightOf = input => (Date.parse(input.arrivalDate) - Date.parse('2027-02-21')) / 86400000;
 const oneNight = input => Date.parse(input.departureDate) - Date.parse(input.arrivalDate) === 86400000;
 
 function graphql(body) {
   const input = body.variables?.input;
-  LOG.push(body.operationName + (input?.specialRates?.hhonors ? ' (points)' : '') + (input && oneNight(input) ? ' night' : ''));
+  const shift = input && !oneNight(input) ? nightOf(input) : 0;
+  LOG.push(body.operationName + (input?.specialRates?.hhonors ? ' (points)' : '') + (input && oneNight(input) ? ' night' : '') +
+    (shift ? ` ${shift > 0 ? '+' : ''}${shift}d` : ''));
 
   if (body.operationName === 'hotelSummaryOptions') {
     return { data: { hotelSummaryOptions: { hotels: HOTELS.concat(OTHERS).map(h => ({ ctyhocn: h.code, name: h.name })) } } };
@@ -157,6 +170,10 @@ function graphql(body) {
             const day = nightOf(body.variables.input);
             perNight = NIGHTLY[code] ? NIGHTLY[code].points[day] : perNight;
             cash = NIGHTLY[code] ? NIGHTLY[code].cash[day] : cash && Math.round(cash / 8);
+          } else if (shift) {
+            if (code === 'MLECICI' && shift === 2) cash = perNight = null;
+            cash = cash && Math.round(cash * SHIFT[shift].cash);
+            perNight = perNight && Math.round(perNight * SHIFT[shift].points / 1000) * 1000;
           }
           return {
             ctyhocn: code,
@@ -321,6 +338,24 @@ function graphql(body) {
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home-split.png') });
 
+  // Flexible Dates: nothing is requested until Load other dates.
+  await page.click('.hpt-tool[data-view="calendar"]');
+  await page.locator('#hpt-view-calendar').screenshot({ path: path.join(outDir, 'calendar-idle.png') });
+  await page.click('#hpt-cal-load');
+  await page.waitForTimeout(2500);
+  await page.locator('#hpt-view-calendar').screenshot({ path: path.join(outDir, 'calendar-loading.png') });
+  await page.waitForFunction(() => !document.querySelector('#hpt-cal-load').disabled, null, { timeout: 60000 });
+  await page.locator('#hpt-view-calendar').screenshot({ path: path.join(outDir, 'calendar.png') });
+  console.log('calendar:', (await page.textContent('#hpt-cal .hpt-split-card')).replace(/\s+/g, ' ').trim());
+  console.log('calendar links:', await page.$$eval('#hpt-cal .hpt-split-card a', as => as.map(a => a.href)));
+  await page.click('[data-cal-mode="points"]');
+  await page.locator('#hpt-view-calendar').screenshot({ path: path.join(outDir, 'calendar-points.png') });
+  console.log('calendar (points):', (await page.textContent('#hpt-cal .hpt-split-card')).replace(/\s+/g, ' ').trim());
+  console.log('calendar (points) without rewards:', await page.$$eval('#hpt-cal .hpt-free-off', rows => rows.map(r => r.textContent.replace(/\s+/g, ' ').trim())));
+  await page.click('[data-cal-mode="cash"]');
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-calendar.png') });
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -333,10 +368,10 @@ function graphql(body) {
   console.log('status:', await page.textContent('#hpt-status'));
   console.log('requests:', LOG.filter(x => !x.startsWith('hotel_')));
 
-  // Cash vs. Points and Free Night Finder switched off: no points or currency requests.
+  // Cash vs. Points, Free Night Finder, Split Stay and Flexible Dates switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

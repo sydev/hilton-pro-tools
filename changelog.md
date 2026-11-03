@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- **Flexible Dates:** a fifth tool that prices the same stay with the arrival moved up to 3 days earlier or later. **Load other dates** sends one cash and one points request per other arrival day and results page (the page says how many before you start), then shows every hotel as a row of arrival days with the price per night, the cheapest day highlighted and your dates outlined. Click a price to open Hilton's rates for those dates.
+- **Cheapest arrival:** two tiles show the cheapest arrival day and what it saves against your dates; the best hotel has **Book ↗** and **Search these dates**, which runs the Hilton search on the new dates so Resort Finder can scan them for Semi-Flex rates.
+- **Arrival range and Show:** *Arrival* picks ±1, ±2 or ±3 days, *Show* switches between **Cash / night** and **Points / night** without new requests. Both are saved.
+- **Flexible Dates card and switch:** the home card shows the cheapest arrival and what it saves; Settings has its on/off switch. It sends nothing until you click **Load other dates**.
+
 ## 0.6.0
 
 ### Added

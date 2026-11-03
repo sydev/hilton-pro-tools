@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.6.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder and split stay optimizer for Hilton searches
+// @version      0.7.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer and flexible dates calendar for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -38,6 +38,8 @@
   const UPDATE_AUTO_KEY = 'hilton-pro-tools-update-auto';
   const FREE_SORT_KEY = 'hilton-pro-tools-free-sort';
   const SPLIT_CERTS_KEY = 'hilton-pro-tools-split-certificates';
+  const CALENDAR_RANGE_KEY = 'hilton-pro-tools-calendar-range';
+  const CALENDAR_MODE_KEY = 'hilton-pro-tools-calendar-mode';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -45,7 +47,8 @@
     resort: 'Resort Finder',
     points: 'Cash vs. Points',
     free: 'Free Night Finder',
-    split: 'Split Stay'
+    split: 'Split Stay',
+    calendar: 'Flexible Dates'
   };
 
   // Description of each tool in the home page's on/off switches.
@@ -53,7 +56,8 @@
     resort: 'Scans Resort Credit hotels for Semi-Flex rates',
     points: 'Loads points prices and exchange rates',
     free: 'Finds Standard Room Rewards for Free Night Certificates',
-    split: 'Mixes cash, points and certificates night by night'
+    split: 'Mixes cash, points and certificates night by night',
+    calendar: 'Compares prices for nearby arrival dates'
   };
 
   // Update check against the published script on GitHub.
@@ -95,6 +99,13 @@
     // A hotel change is only suggested when it saves at least this share.
     switchSaving: 0.1
   };
+
+  // Flexible Dates moves the arrival by up to maxShift days each way, keeping the stay
+  // length, and loads on demand: two requests per shifted stay and results page.
+  const CALENDAR = {
+    maxShift: 3,
+    defaultShift: 2
+  };
  
   const nativeFetch = window.fetch.bind(window);
  
@@ -114,7 +125,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true, split: true },
+    tools: { resort: true, points: true, free: true, split: true, calendar: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -131,6 +142,12 @@
     split: freshSplit(),
     // Free Night Certificates the Split Stay may use.
     certificates: 0,
+    // Flexible Dates: prices of the stay shifted by a few days, see loadCalendar().
+    calendar: freshCalendar(),
+    // Days the arrival is moved each way.
+    calendarRange: CALENDAR.defaultShift,
+    // Flexible Dates shows cash ('cash') or points ('points').
+    calendarMode: 'cash',
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -164,6 +181,11 @@
     if (certificates >= 0) {
       state.certificates = Math.min(SPLIT.maxCertificates, certificates);
     }
+
+    const range = parseInt(localStorage.getItem(CALENDAR_RANGE_KEY), 10);
+    if (range >= 1) state.calendarRange = Math.min(CALENDAR.maxShift, range);
+
+    if (localStorage.getItem(CALENDAR_MODE_KEY) === 'points') state.calendarMode = 'points';
 
     state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
     state.update.skipped = savedUpdate().skipped || null;
@@ -258,6 +280,7 @@
     state.batches = [];
     state.extras = { points: new Set(), pending: 0, error: '' };
     state.split = freshSplit();
+    state.calendar = freshCalendar();
  
     render();
     status(reason);
@@ -667,7 +690,8 @@
     return day.toISOString().slice(0, 10);
   }
 
-  // Cash price of one night in USD, like Hilton's own search asks for it.
+  // Cheapest cash price after tax in USD, like Hilton's own search asks for it
+  // (one night for Split Stay, the shifted stay for Flexible Dates).
   const NIGHT_CASH_QUERY = `
     query shopMultiPropAvail(
       $ctyhocns: [String!],
@@ -799,6 +823,155 @@
     if (generation !== state.generation || state.split !== split) return;
 
     split.status = 'done';
+    render();
+  }
+
+  // status: idle, loading or done; days[i] holds the prices of the stay moved by days[i].offset.
+  function freshCalendar() {
+    return { status: 'idle', range: 0, days: [], arrival: '', done: 0, total: 0, errors: [] };
+  }
+
+  // Today in the user's time zone, as an ISO date.
+  function today() {
+    const now = new Date();
+
+    return new Date(now - now.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  // Days the arrival can move for Flexible Dates, without arrivals in the past; 0 is the search.
+  function calendarShifts(range = state.calendarRange) {
+    const first = today();
+    const shifts = [];
+
+    for (let offset = -range; offset <= range; offset++) {
+      if (addDays(state.search.arrival, offset) >= first) shifts.push(offset);
+    }
+
+    return shifts;
+  }
+
+  // What Flexible Dates asks for on one shift. The search itself already has its cash prices,
+  // and its points prices while Cash vs. Points or Free Night Finder is on.
+  const calendarKinds = offset =>
+    offset ? ['cash', 'points'] : wantsPoints() ? [] : ['points'];
+
+  const calendarRequests = () => state.search
+    ? calendarShifts().reduce((sum, offset) => sum + calendarKinds(offset).length, 0) *
+      state.batches.length
+    : 0;
+
+  // Loads cash and points prices of the same stay with the arrival moved a few days.
+  async function loadCalendar() {
+    if (
+      !state.tools.calendar ||
+      !state.search ||
+      state.calendar.status === 'loading' ||
+      !state.batches.length
+    ) return;
+
+    const generation = state.generation;
+    const batches = [...state.batches];
+    const s = state.search;
+
+    const days = calendarShifts().map(offset => {
+      const kinds = calendarKinds(offset);
+
+      return {
+        offset,
+        arrival: addDays(s.arrival, offset),
+        departure: addDays(s.departure, offset),
+        kinds,
+        // Whole-stay cash in USD and points per night by hotel; null reads the search's own prices.
+        cash: kinds.includes('cash') ? new Map() : null,
+        points: kinds.includes('points') ? new Map() : null
+      };
+    });
+
+    state.calendar = {
+      status: 'loading',
+      range: state.calendarRange,
+      days,
+      done: 0,
+      total: days.reduce((sum, day) => sum + day.kinds.length, 0) * batches.length,
+      errors: []
+    };
+
+    loadCurrencies();
+    render();
+
+    const calendar = state.calendar;
+
+    for (const day of days) {
+      // Shown in the progress line.
+      calendar.arrival = day.arrival;
+
+      for (const batch of batches) {
+        for (const kind of day.kinds) {
+          if (generation !== state.generation || state.calendar !== calendar) return;
+
+          // Switched off while loading: keep nothing half loaded.
+          if (!state.tools.calendar) {
+            state.calendar = freshCalendar();
+            render();
+            return;
+          }
+
+          const points = kind === 'points';
+
+          try {
+            const data = await post(
+              'shopMultiPropAvail',
+              points ? POINTS_QUERY : NIGHT_CASH_QUERY,
+              {
+                input: {
+                  ...batch.input,
+                  arrivalDate: day.arrival,
+                  departureDate: day.departure,
+                  specialRates: {
+                    ...(batch.input.specialRates || {}),
+                    hhonors: points
+                  }
+                },
+                ctyhocns: batch.codes,
+                language: 'en'
+              },
+              'dx_shop_search_app'
+            );
+
+            if (generation !== state.generation || state.calendar !== calendar) return;
+
+            for (const hotel of data?.shopMultiPropAvail || []) {
+              if (!hotel?.ctyhocn || hotel.statusCode !== 0) continue;
+
+              const value = points
+                ? hotel.summary?.hhonors?.dailyRmPointsRate
+                : hotel.summary?.lowest?.amountAfterTax;
+
+              if (Number.isFinite(value) && value > 0) {
+                day[kind].set(hotel.ctyhocn, value);
+              }
+            }
+
+          } catch (error) {
+            if (generation !== state.generation || state.calendar !== calendar) return;
+
+            const issue = `${day.arrival} ${kind}: ${error.message}`;
+            if (!calendar.errors.includes(issue)) calendar.errors.push(issue);
+          }
+
+          calendar.done++;
+          render();
+
+          if (calendar.done < calendar.total) await sleep(CONFIG.delay);
+        }
+      }
+    }
+
+    if (generation !== state.generation || state.calendar !== calendar) return;
+
+    calendar.status = 'done';
     render();
   }
 
@@ -2638,6 +2811,69 @@
     .hpt-split-row[open] summary { margin-bottom: 6px; }
     .hpt-split-row .hpt-leg + .hpt-leg { margin-top: 6px; }
 
+    /* Flexible Dates page. */
+    .hpt-chip.calendar { background: #ffe4e6; color: #9f1239; }
+    .hpt-stat.calendar { background: #fff1f2; }
+    .hpt-stat.calendar b, .hpt-stat.calendar span { color: #9f1239; }
+    .hpt-cal { border-top: 1px solid #e2e8f0; }
+    .hpt-cal-head, .hpt-cal-grid {
+      display: grid;
+      grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+      gap: 3px;
+    }
+    /* Date header stays visible while the hotels scroll. */
+    .hpt-cal-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 8px 14px 6px;
+      background: #fff;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .hpt-cal-day {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: #334155;
+      white-space: nowrap;
+    }
+    .hpt-cal-day small { font-size: 10px; font-weight: 500; color: #64748b; }
+    .hpt-cal-day.current, .hpt-cal-day.current small { color: #0f172a; font-weight: 700; }
+    .hpt-cal-day.current::after {
+      content: '';
+      width: 18px;
+      height: 2px;
+      margin-top: 2px;
+      border-radius: 2px;
+      background: #0f172a;
+    }
+    .hpt-cal-row { padding: 9px 14px; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 5px; }
+    #hilton-pro-tools .hpt-cal-cell {
+      height: 28px;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-decoration: none;
+    }
+    #hilton-pro-tools a.hpt-cal-cell:hover { background: #e2e8f0; color: #0f172a; text-decoration: none; }
+    #hilton-pro-tools .hpt-cal-cell.current { box-shadow: inset 0 0 0 1.5px #334155; }
+    #hilton-pro-tools .hpt-cal-cell.best { background: #dcfce7; color: #166534; }
+    #hilton-pro-tools .hpt-cal.points .hpt-cal-cell.best { background: #dbeafe; color: #1e40af; }
+    #hilton-pro-tools .hpt-cal-cell.none { color: #94a3b8; font-weight: 500; }
+    #hilton-pro-tools a.hpt-cal-cell:focus-visible { outline: 2px solid #0f766e; outline-offset: 1px; }
+    .hpt-cal-sub { font-size: 12px; color: #475569; }
+    .hpt-cal-row .hpt-tag { flex: none; white-space: nowrap; }
+
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
     .hpt-tools { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -2670,6 +2906,7 @@
     .hpt-tool-icon.points { background: #dbeafe; color: #1e40af; }
     .hpt-tool-icon.free { background: #ede9fe; color: #5b21b6; }
     .hpt-tool-icon.split { background: #ffedd5; color: #9a3412; }
+    .hpt-tool-icon.calendar { background: #ffe4e6; color: #9f1239; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -2871,6 +3108,7 @@
     points: svg(20, '<circle cx="9" cy="9" r="6"/><path d="M15.4 10.6A6 6 0 1 1 10.6 15.4"/>'),
     free: svg(20, '<path d="M4 5h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6V6a1 1 0 0 1 1-1z"/><path d="M14 5v2M14 11v2M14 17v2"/>'),
     split: svg(20, '<path d="M3 12h6l4-5h8"/><path d="M13 17h8"/><path d="M9 12l4 5"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>'),
+    dates: svg(20, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -4234,13 +4472,16 @@
 
     $('hpt-tools').hidden = !on;
     // Point value and currency only matter for points comparisons.
-    const valued = wantsPoints() || state.tools.split;
+    const valued = wantsPoints() || state.tools.split || state.tools.calendar;
 
     $('hpt-shared').hidden = !valued;
     $('hpt-shared-note').hidden = !(state.tools.points && state.tools.free);
 
     state.panel.querySelector('.hpt-tool[data-view="split"]')
       .setAttribute('aria-busy', String(state.split.status === 'loading'));
+
+    state.panel.querySelector('.hpt-tool[data-view="calendar"]')
+      .setAttribute('aria-busy', String(state.calendar.status === 'loading'));
 
     $('hpt-settings-sum').textContent = valued
       ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
@@ -4327,6 +4568,27 @@
             || (splitResult.plan
               ? `Best: ≈ ${money(splitResult.value)} · ${planSummary(splitResult.plan.steps)}`
               : 'No hotel has a price for every night'));
+
+    const calendar = state.calendar;
+    const calendarResult = calendarTable();
+    const calendarTop = calendarResult?.top;
+
+    $('hpt-calendar-chip').textContent = calendarResult?.saving > 0
+      ? `−${calendarAmount(calendarResult.saving)}`
+      : '';
+
+    $('hpt-calendar-sub').textContent = calendarBlocked()
+      || (calendar.status === 'loading'
+        ? `Loading other dates · ${calendar.done}/${calendar.total} requests`
+        : calendar.status === 'idle'
+          ? `Compare ±${state.calendarRange} ${plural(state.calendarRange, 'day', 'days')} on demand · ` +
+            `${calendarRequests()} requests`
+          : calendarResult.note
+            || (calendarTop
+              ? `Best: arrive ${shortDate(calendar.days[calendarTop.best].arrival)} · ` +
+                `${state.calendarMode === 'points' ? '' : '≈ '}` +
+                `${calendarAmount(calendarTop.prices[calendarTop.best])} a night at ${calendarTop.name}`
+              : 'No prices on these dates'));
 
     const top = state.tools.resort && topFind();
 
@@ -4467,6 +4729,7 @@
     renderAll();
     renderFree();
     renderSplit();
+    renderCalendar();
 
     const root = $('hpt-results');
 
@@ -4630,6 +4893,354 @@
           expandHotel(button.dataset.expand);
         });
       });
+  }
+
+  // =====================================
+  // Flexible Dates
+  // =====================================
+
+  // A price in the mode Flexible Dates shows, e.g. "€980" or "52,000 pts".
+  const calendarAmount = value =>
+    state.calendarMode === 'points'
+      ? `${number(Math.round(value))} pts`
+      : money(value);
+
+  // Short price for a date cell, e.g. "€980", "€12.4K" or "52k".
+  function cellPrice(value) {
+    if (state.calendarMode === 'points') {
+      return value >= 1000
+        ? `${+(value / 1000).toFixed(value % 1000 ? 1 : 0)}k`
+        : number(value);
+    }
+
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: state.currency,
+        notation: value >= 10000 ? 'compact' : 'standard',
+        maximumFractionDigits: value >= 10000 ? 1 : 0
+      }).format(value);
+    } catch {
+      return String(Math.round(value));
+    }
+  }
+
+  const weekday = date =>
+    new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+      weekday: 'short',
+      timeZone: 'UTC'
+    });
+
+  // Every hotel of the search with its price per night on each loaded arrival day:
+  // cash in the display currency or points.
+  function calendarTable() {
+    const calendar = state.calendar;
+    if (calendar.status !== 'done' || !calendar.days.length) return null;
+
+    const byPoints = state.calendarMode === 'points';
+    const stay = nights();
+    // Savings are for the whole stay; on points every 5th night is free, as in Cash vs. Points.
+    const paid = byPoints ? stay - Math.floor(stay / 5) : stay;
+    const current = calendar.days.findIndex(day => !day.offset);
+    const result = { note: '', rows: [], empty: [], current, top: null, saving: 0 };
+
+    // Cash comes in USD.
+    if (!byPoints && convert(1, 'USD', state.currency) === null) {
+      return { ...result, note: ratesNote() };
+    }
+
+    const perNight = (day, hotel) => {
+      if (byPoints) {
+        return (day.points ? day.points.get(hotel.code) : hotel.points) || null;
+      }
+
+      const total = day.cash
+        ? convert(day.cash.get(hotel.code), 'USD', state.currency)
+        : hotel.cash
+          ? convert(hotel.cash.amount, hotel.cash.currency, state.currency)
+          : null;
+
+      return total === null ? null : total / stay;
+    };
+
+    for (const hotel of state.hotels.values()) {
+      if (hotel.bookable === false) continue;
+
+      const prices = calendar.days.map(day => perNight(day, hotel));
+      const known = prices.filter(price => price !== null);
+      const name = hotelName(hotel.code);
+
+      if (!known.length) {
+        result.empty.push({ hotel, name });
+        continue;
+      }
+
+      const low = Math.min(...known);
+      const searched = prices[current] ?? null;
+
+      result.rows.push({
+        hotel,
+        name,
+        resort: Boolean(state.resorts?.has(hotel.code)),
+        prices,
+        // On a tie the searched dates win, so no move is suggested for nothing.
+        best: searched === low ? current : prices.indexOf(low),
+        // What the cheapest day saves on the whole stay, null without a price on the searched dates.
+        saving: searched === null ? null : (searched - low) * paid
+      });
+    }
+
+    result.rows.sort((a, b) =>
+      a.prices[a.best] - b.prices[b.best] ||
+      a.name.localeCompare(b.name)
+    );
+    result.empty.sort((a, b) => a.name.localeCompare(b.name));
+
+    const top = result.rows[0] || null;
+    const searched = result.rows
+      .map(row => row.prices[current] ?? null)
+      .filter(price => price !== null);
+
+    result.top = top;
+    // Cheapest stay overall against the cheapest one on the searched dates.
+    result.saving = top && searched.length
+      ? Math.max(0, (Math.min(...searched) - top.prices[top.best]) * paid)
+      : 0;
+
+    // The search's own points prices may still be loading.
+    if (byPoints && current >= 0 && !calendar.days[current].points && state.extras.pending) {
+      result.note = 'Loading points prices…';
+    }
+
+    return result;
+  }
+
+  // Why Flexible Dates can't run for this search, or ''.
+  function calendarBlocked() {
+    if (!state.search) return 'Waiting for a search';
+    if (!state.batches.length) return 'Waiting for hotels';
+
+    return '';
+  }
+
+  // The same Hilton search on other dates; the panel then follows the new search.
+  function searchURL(day) {
+    if (!location.pathname.includes('/search')) return '';
+
+    const url = new URL(location.href);
+    url.searchParams.set('arrivalDate', day.arrival);
+    url.searchParams.set('departureDate', day.departure);
+
+    return url.href;
+  }
+
+  function renderCalendar() {
+    const root = $('hpt-cal');
+    const calendar = state.calendar;
+    const blocked = calendarBlocked();
+    const loading = calendar.status === 'loading';
+    const byPoints = state.calendarMode === 'points';
+
+    $('hpt-cal-controls').hidden = Boolean(blocked);
+
+    const select = $('hpt-cal-range');
+    if (document.activeElement !== select) select.value = String(state.calendarRange);
+
+    $('hpt-cal-load').disabled = loading;
+    $('hpt-cal-label').textContent =
+      calendar.status === 'done' && calendar.range === state.calendarRange
+        ? 'Reload prices'
+        : 'Load other dates';
+
+    $('hpt-cal-mode').hidden = calendar.status !== 'done';
+
+    for (const button of state.panel.querySelectorAll('[data-cal-mode]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.calMode === state.calendarMode));
+    }
+
+    if (blocked) {
+      $('hpt-cal-status').innerHTML = '';
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>${html(blocked)}</b>
+          <p>Search a destination and dates on Hilton.</p>
+        </div>
+      `;
+      return;
+    }
+
+    if (loading) {
+      $('hpt-cal-status').innerHTML = `
+        <div class="hpt-progress">
+          <div class="hpt-row">
+            <b>Loading arrival ${html(shortDate(calendar.arrival || state.search.arrival))}</b>
+            <span>${calendar.done}/${calendar.total} requests</span>
+          </div>
+          <div class="hpt-bar">
+            <div style="width:${Math.round(100 * calendar.done / Math.max(1, calendar.total))}%"></div>
+          </div>
+        </div>
+      `;
+      root.innerHTML = '';
+      return;
+    }
+
+    if (calendar.status === 'idle') {
+      const requests = calendarRequests();
+
+      $('hpt-cal-status').textContent =
+        `Sends ${requests} requests to Hilton (cash and points for each other arrival day), ` +
+        `about ${Math.max(1, Math.round(requests * (CONFIG.delay + 400) / 60000))} min.`;
+      root.innerHTML = '';
+      return;
+    }
+
+    const table = calendarTable();
+    const errors = calendar.errors.length
+      ? `${calendar.errors.length} of ${calendar.total} requests failed`
+      : '';
+
+    $('hpt-cal-status').textContent =
+      [errors, table.note].filter(Boolean).join(' · ');
+
+    if (!table.rows.length) {
+      root.innerHTML = table.note ? '' : `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>No ${byPoints ? 'reward rooms' : 'prices'} on these dates</b>
+          <p>Try a wider range or other dates.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const { rows, empty, current, top } = table;
+    const days = calendar.days;
+    const columns = days.length;
+    const bestDay = days[top.best];
+    const search = bestDay.offset ? searchURL(bestDay) : '';
+    const title = (day, price) =>
+      `Arrive ${weekday(day.arrival)}, ${shortDate(day.arrival)}` +
+      (price === null ? ': not available' : `: ${byPoints ? '' : '≈ '}${calendarAmount(price)} a night`);
+
+    root.innerHTML = `
+      <div class="hpt-split-stats">
+        <div class="hpt-stats">
+          <div class="hpt-stat calendar">
+            <b>${html(`${weekday(bestDay.arrival)}, ${shortDate(bestDay.arrival)}`)}</b>
+            <span>cheapest arrival</span>
+          </div>
+          <div class="hpt-stat${table.saving ? ' good' : ''}">
+            <b>${byPoints ? '' : '≈ '}${html(calendarAmount(table.saving))}</b>
+            <span>saved vs. your dates</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hpt-split-card">
+        <div class="hpt-row">
+          <span class="hpt-name">${html(top.name)}</span>
+          ${top.saving > 0
+            ? `<span class="hpt-chip calendar">−${html(calendarAmount(top.saving))}</span>`
+            : ''}
+        </div>
+        <div class="hpt-split-total">
+          ${html(stay(bestDay.arrival, bestDay.departure))} ·
+          ${byPoints ? '' : '≈ '}${html(calendarAmount(top.prices[top.best]))} a night
+        </div>
+        <div class="hpt-links">
+          <a
+            href="${html(rateURL(top.hotel, byPoints, bestDay))}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Book ↗</a>
+          ${search ? `<a href="${html(search)}">Search these dates</a>` : ''}
+        </div>
+      </div>
+
+      <div class="hpt-cal${byPoints ? ' points' : ''}" style="--cols:${columns}">
+        <div class="hpt-cal-head">
+          ${days.map((day, index) => `
+            <span class="hpt-cal-day${index === current ? ' current' : ''}">
+              <small>${html(weekday(day.arrival))}</small>
+              ${html(shortDate(day.arrival))}
+            </span>
+          `).join('')}
+        </div>
+
+        ${rows.map(row => `
+          <div class="hpt-cal-row">
+            <div class="hpt-row">
+              <span class="hpt-name">${html(row.name)}</span>
+              ${row.resort ? '<span class="hpt-tag">Resort Credit</span>' : ''}
+            </div>
+            <div class="hpt-cal-grid">
+              ${row.prices.map((price, index) => {
+                const day = days[index];
+                const tone = [
+                  'hpt-cal-cell',
+                  index === row.best ? 'best' : '',
+                  index === current ? 'current' : '',
+                  price === null ? 'none' : ''
+                ].filter(Boolean).join(' ');
+
+                return price === null
+                  ? `<span class="${tone}" title="${html(title(day, null))}">–</span>`
+                  : `<a
+                      class="${tone}"
+                      href="${html(rateURL(row.hotel, byPoints, day))}"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="${html(title(day, price))}"
+                    >${html(cellPrice(price))}</a>`;
+              }).join('')}
+            </div>
+            <div class="hpt-cal-sub">
+              ${html(row.saving === null
+                ? `Best: ${weekday(days[row.best].arrival)}, ${shortDate(days[row.best].arrival)} · not available on your dates`
+                : row.best === current
+                  ? 'Your dates are the cheapest'
+                  : `Best: ${weekday(days[row.best].arrival)}, ${shortDate(days[row.best].arrival)} · saves ${byPoints ? '' : '≈ '}${calendarAmount(row.saving)}`)}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      ${empty.length ? `
+        <div class="hpt-free-title">No ${byPoints ? 'reward rooms' : 'rooms'} on any of these dates</div>
+        ${empty.map(row => `
+          <div class="hpt-free-off">
+            <span>${html(row.name)}</span>
+            <span class="hpt-chip muted">${byPoints ? 'No reward rooms' : 'Sold out'}</span>
+          </div>
+        `).join('')}
+      ` : ''}
+    `;
+  }
+
+  function setCalendarRange(value) {
+    const range = parseInt(value, 10);
+
+    state.calendarRange = range >= 1
+      ? Math.min(CALENDAR.maxShift, range)
+      : CALENDAR.defaultShift;
+
+    try {
+      localStorage.setItem(CALENDAR_RANGE_KEY, String(state.calendarRange));
+    } catch {}
+
+    render();
+  }
+
+  function setCalendarMode(mode) {
+    state.calendarMode = mode === 'points' ? 'points' : 'cash';
+
+    try {
+      localStorage.setItem(CALENDAR_MODE_KEY, state.calendarMode);
+    } catch {}
+
+    render();
   }
 
   // =====================================
@@ -4853,6 +5464,18 @@
               </span>
               ${ICON.chevron}
             </button>
+
+            <button class="hpt-tool" type="button" data-view="calendar">
+              <span class="hpt-tool-icon calendar">${ICON.dates}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Flexible Dates</b>
+                  <span id="hpt-calendar-chip" class="hpt-chip calendar"></span>
+                </span>
+                <span id="hpt-calendar-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
           </div>
 
           <div id="hpt-top" class="hpt-section" hidden>
@@ -4928,6 +5551,21 @@
                   role="switch"
                   data-tool="split"
                   aria-label="Split Stay"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small calendar">${ICON.dates}</span>
+                <span class="hpt-tool-text">
+                  <b>Flexible Dates</b>
+                  <span id="hpt-calendar-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="calendar"
+                  aria-label="Flexible Dates"
                 >
               </label>
 
@@ -5087,6 +5725,51 @@
             free (Silver and up). Each leg is booked separately; check prices on Hilton before booking.
           </div>
         </div>
+
+        <div id="hpt-view-calendar" hidden>
+          <div id="hpt-cal-controls" class="hpt-controls">
+            <div class="hpt-free-intro">
+              Prices the same stay with the arrival a few days earlier or later,
+              for every hotel of the search.
+            </div>
+
+            <div class="hpt-split-pick">
+              <label class="hpt-settings">
+                Arrival
+                <select id="hpt-cal-range" aria-label="Days to move the arrival each way">
+                  ${Array.from(
+                    { length: CALENDAR.maxShift },
+                    (_, index) => `<option value="${index + 1}">±${index + 1} ${plural(index + 1, 'day', 'days')}</option>`
+                  ).join('')}
+                </select>
+              </label>
+
+              <button id="hpt-cal-load" class="hpt-primary" type="button">
+                ${ICON.refresh}
+                <span id="hpt-cal-label" class="hpt-idle">Load other dates</span>
+                <span class="hpt-busy">Loading…</span>
+              </button>
+            </div>
+
+            <div id="hpt-cal-mode" class="hpt-free-sort" hidden>
+              <span>Show</span>
+              <div class="hpt-seg" role="group" aria-label="Show prices in">
+                <button type="button" data-cal-mode="cash" aria-pressed="true">Cash / night</button>
+                <button type="button" data-cal-mode="points" aria-pressed="false">Points / night</button>
+              </div>
+            </div>
+
+            <div id="hpt-cal-status" class="hpt-hint"></div>
+          </div>
+
+          <div id="hpt-cal"></div>
+
+          <div class="hpt-footer">
+            Every column is a stay of the same length from another arrival day. Click a price to open
+            Hilton's rates for those dates. Semi-Flex rates for the Resort Credit change by date too:
+            use <b>Search these dates</b> and let Resort Finder scan them.
+          </div>
+        </div>
       </div>
     `;
 
@@ -5129,10 +5812,15 @@
 
       const sort = event.target.closest('[data-free-sort]')?.dataset.freeSort;
       if (sort) setFreeSort(sort);
+
+      const mode = event.target.closest('[data-cal-mode]')?.dataset.calMode;
+      if (mode) setCalendarMode(mode);
     });
 
     $('hpt-split-load').onclick = loadSplit;
     $('hpt-certs').onchange = event => setCertificates(event.target.value);
+    $('hpt-cal-load').onclick = loadCalendar;
+    $('hpt-cal-range').onchange = event => setCalendarRange(event.target.value);
 
     $('hpt-update-auto').onchange = event => {
       state.update.auto = event.target.checked;
