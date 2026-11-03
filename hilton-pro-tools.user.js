@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.4.0
+// @version      0.4.1
 // @description  Aspire resort credit finder (Semi-Flex deposit rates) and cash vs. points comparison for Hilton searches
 // @author       sydev
 // @license      MIT
@@ -2868,7 +2868,9 @@
     const stay = nights();
     if (!stay) return null;
 
-    const points = perNight ? perNight * stay : null;
+    // Standard Room Rewards: every 5th night of a stay is free (Silver and up).
+    const freeNights = Math.floor(stay / 5);
+    const points = perNight ? perNight * (stay - freeNights) : null;
 
     // The point value is set in euro cents.
     const pointsEuro = points ? points * state.pointValue / 100 : null;
@@ -2879,6 +2881,7 @@
 
     return {
       perNight,
+      freeNights,
       points,
       pointsValue,
       cashValue,
@@ -2919,7 +2922,11 @@
 
     const pointsLine = `
       <div class="hpt-row">
-        <span>Points (${number(result.perNight)}/night)</span>
+        <span>
+          Points (${number(result.perNight)}/night${result.freeNights
+            ? `, ${result.freeNights} ${plural(result.freeNights, 'night', 'nights')} free`
+            : ''})
+        </span>
         <b>
           ${number(result.points)}
           ${result.pointsValue === null ? '' : `≈ ${money(result.pointsValue)}`}
@@ -3058,6 +3065,7 @@
         if (result?.points) {
           parts.push(
             `${number(result.points)} pts` +
+            (result.freeNights ? ` (${result.freeNights} free)` : '') +
             (result.pointsValue === null ? '' : ` ≈ ${money(result.pointsValue)}`)
           );
         } else {
@@ -3571,6 +3579,7 @@
       'Deposit required',
       'Refundable flag',
       'Points per night',
+      'Free nights',
       'Total points',
       `Points value (${state.currency})`,
       `Cash (${state.currency})`,
@@ -3607,6 +3616,7 @@
           rate ? 'true' : '',
           rate ? 'true' : '',
           result?.perNight,
+          result?.freeNights,
           result?.points,
           round(result?.pointsValue),
           round(result?.cashValue),

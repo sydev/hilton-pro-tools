@@ -83,7 +83,7 @@ Two tiles show how many hotels are eligible for the Resort Credit and how many h
 The **Cash vs. Points** page lists every hotel of the search (**Change** next to the summary opens the shared settings):
 
 - **Cash:** the cheapest cash rate of the stay after tax, as Hilton's search returns it.
-- **Points:** the Standard Room Reward points per night times the nights, and what they are worth at your point value.
+- **Points:** the Standard Room Reward points per night times the nights, minus every 5th night (free on Standard Room Rewards for Silver members and up, for example *(1 free)* on a 5-night stay), and what they are worth at your point value.
 - **Value per point:** the cash price divided by the points, in euro cents (for example *2.54 ct/pt*). If it is higher than your point value, paying with points is the better deal.
 - **Points** / **Cash** chip: whichever is cheaper. Resort credit hotels are marked.
 - **View rates ↗** opens the room selection on Hilton for that hotel and your dates.
@@ -112,7 +112,7 @@ Prices are converted with the exchange rates from Hilton's currency converter.
 ## Notes and limitations
 
 - **No guarantee:** A rate with a deposit does not guarantee that you're charged immediately or that the Aspire resort credit is applied. Always check the cancellation and payment terms on Hilton's booking page.
-- **Cash vs. points is an estimate:** the cash side is the cheapest rate Hilton shows, which may be a non-refundable Advance Purchase rate. The points side assumes the same points price every night, and does not include the 5th night free on Standard Room Rewards.
+- **Cash vs. points is an estimate:** the cash side is the cheapest rate Hilton shows, which may be a non-refundable Advance Purchase rate. The points side assumes the same points price every night and always counts the 5th night free, which needs Silver status or higher.
 - Rate names are queried in English. The script only finds rates whose name or description contains "Semi-Flex".
 - **Many requests:** A scan can send several hundred requests to Hilton with your logged-in session. Hilton may answer with captchas or rate limits (*HTTP 429* under **Diagnostics**). Turn off auto scan if you only want to scan on demand.
 - Hilton can change its website or API at any time. If that happens, the script may stop working until it's updated.

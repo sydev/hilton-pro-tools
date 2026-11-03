@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+### Changed
+
+- **5th night free in Cash vs. Points:** stays of 5 nights or more count every 5th night as free on the points side, as Hilton does for Standard Room Rewards (Silver and up). The points line shows it (for example *Points (60,000/night, 1 night free)*, *(1 free)* in the hotel list), and the CSV has a *Free nights* column.
+
 ## 0.4.0
 
 ### Added
