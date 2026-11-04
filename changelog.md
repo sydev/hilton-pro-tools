@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+
+- **Price Watch:** a seventh tool that remembers booked or planned stays and checks their rate again whenever you open hilton.com (at most every 6 hours per stay, two requests each). When the total drops by at least 1 % below what you paid, the stay shows *Rebook: −$3,250*, with **Book ↗** to book it again at the lower price.
+- **Watch price** next to every rate in the Rate Inspector adds that hotel, room, rate, dates and guests to the watchlist (up to 10 stays).
+- **Paid, Check now and Remove:** enter what you actually paid, check every upcoming stay right away, or take a stay off the list. Past stays are no longer checked.
+- **Rebook badge:** the biggest saving shows on the Price Watch card and next to the title of the minimized panel. Settings has its on/off switch; off sends no requests.
+
 ## 0.8.0
 
 ### Added

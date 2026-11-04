@@ -11,7 +11,7 @@ Possible further tools for Hilton Pro Tools, ordered by value and effort. Each b
 ## Medium value
 
 4. **Rate inspector** *(done in 0.8.0 as Rate Inspector, without Points & Money)*. All rate plans of a hotel side by side: Flex, Semi-Flex, Advance Purchase, Honors discount, AAA/Senior, Points & Money, with cancellation deadline, deposit and markup over the cheapest rate ("flexibility costs +12 % here"). `discoverRooms()` and `extractRates()` already fetch this data; it just isn't shown.
-5. **Price watchlist.** Remember a booked or planned stay (hotel, dates, rate, price) in `localStorage`; on every visit to hilton.com quietly check whether the price dropped and show a badge ("Rebook: −€140"). Makes sense because Semi-Flex and Flex are refundable. No server, so it only runs while hilton.com is open.
+5. **Price watchlist** *(done in 0.9.0 as Price Watch)*. Remember a booked or planned stay (hotel, dates, rate, price) in `localStorage`; on every visit to hilton.com quietly check whether the price dropped and show a badge ("Rebook: −€140"). Makes sense because Semi-Flex and Flex are refundable. No server, so it only runs while hilton.com is open.
 6. **Premium room / suite finder.** Which suites or upgrades are available on points or cash, and the markup over the standard room, in cash and in point value.
 
 ## Nice to have

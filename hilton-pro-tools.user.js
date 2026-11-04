@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.8.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar and rate inspector for Hilton searches
+// @version      0.9.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar, rate inspector and price watchlist for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -41,6 +41,7 @@
   const CALENDAR_RANGE_KEY = 'hilton-pro-tools-calendar-range';
   const CALENDAR_MODE_KEY = 'hilton-pro-tools-calendar-mode';
   const RATES_SPECIAL_KEY = 'hilton-pro-tools-rates-special';
+  const WATCH_KEY = 'hilton-pro-tools-watchlist';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -50,7 +51,8 @@
     free: 'Free Night Finder',
     split: 'Split Stay',
     calendar: 'Flexible Dates',
-    rates: 'Rate Inspector'
+    rates: 'Rate Inspector',
+    watch: 'Price Watch'
   };
 
   // Description of each tool in the home page's on/off switches.
@@ -60,7 +62,8 @@
     free: 'Finds Standard Room Rewards for Free Night Certificates',
     split: 'Mixes cash, points and certificates night by night',
     calendar: 'Compares prices for nearby arrival dates',
-    rates: 'Shows every rate plan of one hotel side by side'
+    rates: 'Shows every rate plan of one hotel side by side',
+    watch: 'Checks watched stays for a lower price'
   };
 
   // Update check against the published script on GitHub.
@@ -109,6 +112,17 @@
     maxShift: 3,
     defaultShift: 2
   };
+
+  // Price Watch re-prices watched stays when a hilton.com page loads: two requests per stay.
+  const WATCH = {
+    maxStays: 10,
+    startDelay: 6000,
+    // A stay is checked at most this often; failed checks are retried sooner.
+    everyHours: 6,
+    retryMinutes: 30,
+    // A drop of at least this share of the paid price is worth rebooking.
+    minDrop: 0.01
+  };
  
   const nativeFetch = window.fetch.bind(window);
  
@@ -128,7 +142,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true },
+    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true, watch: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -157,6 +171,8 @@
     plans: new Map(),
     // Rate Inspector also asks for AAA and Senior rates.
     inspectSpecial: false,
+    // Price Watch: watched stays (saved, see loadWatchItems()) and the running check.
+    watch: { items: [], status: 'idle', done: 0, total: 0 },
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -1348,8 +1364,8 @@
     }
   `;
  
-  function variables(code, room, cacheId) {
-    const s = state.search;
+  // s: the search to price, by default the current one (Price Watch passes a saved stay).
+  function variables(code, room, cacheId, s = state.search) {
  
     return {
       ctyhocn: code,
@@ -2347,8 +2363,8 @@
   // =====================================
  
   // dates ({ arrival, departure }) books part of the stay, e.g. one leg of a split stay.
-  function rateURL(entry, points = false, dates = null) {
-    const s = state.search;
+  // s: the search to open, by default the current one.
+  function rateURL(entry, points = false, dates = null, s = state.search) {
     if (!s) return '';
  
     const url = new URL(
@@ -2908,6 +2924,17 @@
     .hpt-rate-markup.low { color: #166534; }
     .hpt-rate-cxl { font-size: 12px; color: #475569; }
 
+    /* Price Watch page. */
+    .hpt-watching { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #155e75; white-space: nowrap; }
+    .hpt-watch-list { border-top: 1px solid #e2e8f0; }
+    .hpt-watch-row { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 4px; }
+    .hpt-watch-row .hpt-row > b { font-size: 13px; white-space: nowrap; }
+    .hpt-watch-row .hpt-free-sub { align-items: center; }
+    .hpt-watch-row.past .hpt-name, .hpt-watch-row.past .hpt-row > b { color: #64748b; }
+    .hpt-watch-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-top: 2px; }
+    #hilton-pro-tools .hpt-watch-foot .hpt-settings { gap: 6px; }
+    #hilton-pro-tools .hpt-watch-foot .hpt-settings input { width: 92px; }
+
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
     .hpt-tools { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -2942,6 +2969,7 @@
     .hpt-tool-icon.split { background: #ffedd5; color: #9a3412; }
     .hpt-tool-icon.calendar { background: #ffe4e6; color: #9f1239; }
     .hpt-tool-icon.rates { background: #fef9c3; color: #854d0e; }
+    .hpt-tool-icon.watch { background: #cffafe; color: #155e75; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -3145,6 +3173,7 @@
     split: svg(20, '<path d="M3 12h6l4-5h8"/><path d="M13 17h8"/><path d="M9 12l4 5"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>'),
     dates: svg(20, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/>'),
     rates: svg(20, '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+    watch: svg(20, '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -3353,15 +3382,15 @@
   // Cash vs. points
   // =====================================
 
-  const money = value => {
+  const money = (value, currency = state.currency) => {
     try {
       return new Intl.NumberFormat('en-US', {
         style: 'currency',
-        currency: state.currency,
+        currency,
         maximumFractionDigits: 0
       }).format(value);
     } catch {
-      return `${state.currency} ${Math.round(value)}`;
+      return `${currency} ${Math.round(value)}`;
     }
   };
 
@@ -4523,6 +4552,9 @@
     state.panel.querySelector('.hpt-tool[data-view="rates"]')
       .setAttribute('aria-busy', String(state.inspect.status === 'loading'));
 
+    state.panel.querySelector('.hpt-tool[data-view="watch"]')
+      .setAttribute('aria-busy', String(state.watch.status === 'checking'));
+
     $('hpt-settings-sum').textContent = valued
       ? `${on === total ? `${on} tools on` : `${on} of ${total} tools on`} · ` +
         `${state.pointValue} ct · ${state.currency}`
@@ -4655,6 +4687,24 @@
                       : `refundable ${percent(inspected.flexibility)} over cheapest`)
                 : 'Pick a hotel to compare its rate plans';
 
+    const watch = state.watch;
+    const drops = rebooks();
+    const ahead = watch.items.filter(upcoming);
+
+    $('hpt-watch-chip').textContent = drops.length
+      ? `−${money(watchDrop(drops[0]), drops[0].search.currency)}`
+      : '';
+
+    $('hpt-watch-sub').textContent = watch.status === 'checking'
+      ? `Checking prices · ${watch.done}/${watch.total} stays`
+      : drops.length
+        ? `Rebook ${drops[0].name}: now ${drops[0].price || money(drops[0].total, drops[0].search.currency)}` +
+          (drops.length > 1 ? ` · ${drops.length - 1} more` : '')
+        : ahead.length
+          ? `${ahead.length} ${plural(ahead.length, 'stay', 'stays')} watched · ` +
+            `checked ${ago(Math.max(...ahead.map(item => item.checked || 0)))}`
+          : 'Watch a rate from the Rate Inspector';
+
     const top = state.tools.resort && topFind();
 
     $('hpt-top').hidden = !top;
@@ -4722,6 +4772,8 @@
       state.inspect = freshInspect(state.inspect.code);
     }
 
+    if (tool === 'watch' && on) checkWatch();
+
     if ((tool === 'points' || tool === 'free') && on && state.search) {
       for (const batch of state.batches) {
         loadPoints(batch.codes, batch.input, state.generation);
@@ -4775,6 +4827,12 @@
       ? `${matched} ${plural(matched, 'match', 'matches')}`
       : '';
 
+    const drop = state.tools.watch && rebooks()[0];
+
+    $('hpt-min-watch').textContent = drop
+      ? `Rebook: −${money(watchDrop(drop), drop.search.currency)}`
+      : '';
+
     const stats = $('hpt-stats');
 
     stats.hidden = !s;
@@ -4801,6 +4859,7 @@
     renderSplit();
     renderCalendar();
     renderRates();
+    renderWatch();
 
     const root = $('hpt-results');
 
@@ -5325,6 +5384,9 @@
 
   const planKey = (code, room, special) => `${code}|${room}|${special}`;
 
+  // One rate plan of a room type, as ratePlans() returns it.
+  const planId = plan => `${plan.code}|${plan.name}|${plan.honors}`;
+
   // status: idle, loading, done or failed; rooms come from the scan or one room type request.
   function freshInspect(code) {
     return {
@@ -5570,20 +5632,26 @@
     if (!inspect.room) return null;
 
     const lists = inspectSpecials()
-      .map(special => state.plans.get(planKey(inspect.code, inspect.room, special)))
-      .filter(Boolean);
+      .map(special => ({
+        special,
+        rates: state.plans.get(planKey(inspect.code, inspect.room, special))
+      }))
+      .filter(list => list.rates);
 
     if (!lists.length) return null;
 
     const seen = new Set();
     const plans = [];
 
-    for (const plan of lists.flatMap(ratePlans)) {
-      const key = `${plan.code}|${plan.name}|${plan.honors}`;
-      if (seen.has(key)) continue;
+    for (const { special, rates } of lists) {
+      for (const plan of ratePlans(rates)) {
+        const key = planId(plan);
+        if (seen.has(key)) continue;
 
-      seen.add(key);
-      plans.push({ ...plan, kind: rateKind(plan) });
+        seen.add(key);
+        // special: the special rate it was asked for with, '' for the normal rates.
+        plans.push({ ...plan, special, kind: rateKind(plan) });
+      }
     }
 
     plans.sort((a, b) =>
@@ -5778,7 +5846,10 @@
               </span>
             </div>
             ${plan.cancellation ? `<div class="hpt-rate-cxl">${html(plan.cancellation)}</div>` : ''}
-            <span class="hpt-code">${html(plan.code)}</span>
+            <div class="hpt-row">
+              <span class="hpt-code">${html(plan.code)}</span>
+              ${watchButton(plan)}
+            </div>
           </div>
         `).join('')}
       </div>
@@ -5793,6 +5864,410 @@
         </div>
       </div>
     `;
+  }
+
+  // =====================================
+  // Price Watch
+  // =====================================
+
+  // Watched stays from localStorage. Each one keeps the search it was priced with, the rate
+  // plan, what was paid and the latest total (both for the stay, in that search's currency).
+  function loadWatchItems() {
+    try {
+      const items = JSON.parse(localStorage.getItem(WATCH_KEY));
+
+      return Array.isArray(items)
+        ? items.filter(item => item?.id && item.search?.arrival && item.room && item.rate)
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  state.watch.items = loadWatchItems();
+
+  function saveWatch() {
+    try {
+      localStorage.setItem(WATCH_KEY, JSON.stringify(state.watch.items));
+    } catch {}
+  }
+
+  // The same stay, room and rate plan.
+  const watchKey = item => [
+    item.code,
+    item.room,
+    item.rate,
+    item.honors,
+    item.special,
+    item.search.arrival,
+    item.search.departure,
+    item.search.adults,
+    item.search.children,
+    item.search.rooms,
+    item.search.currency
+  ].join('|');
+
+  const stayNights = s => Math.max(
+    1,
+    Math.round((Date.parse(s.departure) - Date.parse(s.arrival)) / 86400000)
+  );
+
+  // Total for the stay, from Hilton's formatted price or else the nightly rate.
+  function planTotal(plan, stay) {
+    const total = cashTotal(plan, stay);
+    if (total) return total;
+
+    return plan.amount > 0 ? plan.amount * stay : null;
+  }
+
+  // A watch item for one plan of the Rate Inspector, without the prices yet.
+  function watchTarget(plan) {
+    const inspect = state.inspect;
+
+    return {
+      code: inspect.code,
+      codeUsed: inspect.codeUsed || inspect.code,
+      room: inspect.room,
+      rate: plan.code,
+      honors: plan.honors,
+      special: plan.special || '',
+      search: { ...state.search }
+    };
+  }
+
+  const isWatched = target =>
+    state.watch.items.some(item => watchKey(item) === watchKey(target));
+
+  function watchButton(plan) {
+    if (!state.tools.watch || !state.search) return '';
+
+    if (isWatched(watchTarget(plan))) {
+      return `<span class="hpt-watching">${ICON.check}Watching</span>`;
+    }
+
+    const full = state.watch.items.length >= WATCH.maxStays;
+
+    return `
+      <button
+        type="button"
+        class="hpt-link-btn"
+        data-watch="${html(planId(plan))}"
+        ${full ? `disabled title="${html(`Price Watch is full (${WATCH.maxStays} stays)`)}"` : ''}
+      >Watch price</button>
+    `;
+  }
+
+  // Adds a rate plan of the Rate Inspector to the watchlist, at its current price.
+  function watchRate(id) {
+    if (!state.tools.watch || !state.search) return;
+
+    const plan = inspectPlans()?.plans.find(item => planId(item) === id);
+    const total = plan && planTotal(plan, nights());
+    if (!total) return;
+
+    const target = watchTarget(plan);
+    const inspect = state.inspect;
+
+    // Another tab may have changed the list.
+    state.watch.items = loadWatchItems();
+
+    if (!isWatched(target) && state.watch.items.length < WATCH.maxStays) {
+      state.watch.items.push({
+        ...target,
+        id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+        name: hotelName(inspect.code),
+        roomName: inspect.rooms?.find(room => room.roomTypeCode === inspect.room)
+          ?.roomTypeName || inspect.room,
+        rateName: plan.name,
+        // What was paid (editable on the Price Watch page) and the latest price.
+        paid: total,
+        total,
+        price: plan.price,
+        status: 'ok',
+        error: '',
+        added: Date.now(),
+        checked: Date.now()
+      });
+
+      saveWatch();
+    }
+
+    render();
+  }
+
+  function unwatchStay(id) {
+    state.watch.items = loadWatchItems().filter(item => item.id !== id);
+    saveWatch();
+    render();
+  }
+
+  // Accepts "1234.50", "1,234.50" and "1234,50".
+  function setPaid(id, value) {
+    const text = String(value).replace(/[^\d.,]/g, '');
+    const paid = parseFloat(
+      /,\d{1,2}$/.test(text) && !text.includes('.')
+        ? text.replace(',', '.')
+        : text.replace(/,/g, '')
+    );
+
+    state.watch.items = loadWatchItems();
+
+    const item = state.watch.items.find(other => other.id === id);
+
+    if (item && paid > 0) {
+      item.paid = paid;
+      saveWatch();
+    }
+
+    render();
+  }
+
+  const upcoming = item => item.search.arrival >= today();
+
+  // Stays to check now: upcoming ones whose last check is old enough (all of them when manual).
+  function dueStays(manual) {
+    return state.watch.items.filter(item => {
+      if (!upcoming(item)) return false;
+      if (manual) return true;
+
+      const wait = item.status === 'failed'
+        ? WATCH.retryMinutes * 60000
+        : WATCH.everyHours * 3600000;
+
+      return Date.now() - (item.checked || 0) >= wait;
+    });
+  }
+
+  // Prices one watched stay like the Rate Inspector does: its room types, then the rates of
+  // its room type. Never throws; returns the fields to update.
+  async function priceStay(item) {
+    const cache = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+
+    try {
+      const quick = await ask(
+        QUICK,
+        variables(item.codeUsed, null, cache, item.search),
+        false
+      );
+
+      if (quick.unavailable) return { status: 'soldout', error: '' };
+
+      if (!(quick.shopAvail.roomTypes || []).some(room => room.roomTypeCode === item.room)) {
+        return { status: 'gone', error: 'Room type not offered' };
+      }
+
+      await sleep(CONFIG.delay);
+
+      const values = variables(item.codeUsed, item.room, cache, item.search);
+      if (item.special) values.specialRates = { ...values.specialRates, [item.special]: true };
+
+      const full = await ask(FULL, values, false);
+
+      if (full.unavailable) return { status: 'soldout', error: '' };
+
+      const rates = (full.shopAvail.roomTypes || [])
+        .find(room => room.roomTypeCode === item.room)?.roomOnlyRates;
+
+      const plan = ratePlans(rates).find(other =>
+        other.code === item.rate && other.honors === item.honors
+      );
+
+      const total = plan && planTotal(plan, stayNights(item.search));
+
+      return total
+        ? { status: 'ok', error: '', total, price: plan.price }
+        : { status: 'gone', error: 'Rate not offered' };
+
+    } catch (error) {
+      return { status: 'failed', error: error.message };
+    }
+  }
+
+  // Checks the due watched stays one by one, on page load or with Check now.
+  async function checkWatch(manual = false) {
+    const watch = state.watch;
+
+    if (!state.tools.watch || watch.status === 'checking') return;
+
+    watch.items = loadWatchItems();
+
+    const due = dueStays(manual);
+
+    if (!due.length) {
+      render();
+      return;
+    }
+
+    watch.status = 'checking';
+    watch.done = 0;
+    watch.total = due.length;
+    render();
+
+    for (const stay of due) {
+      // Switched off while checking: stop, keep what was checked.
+      if (!state.tools.watch) break;
+      if (watch.done) await sleep(CONFIG.delay);
+
+      const result = await priceStay(stay);
+
+      // Another tab may have changed the list meanwhile; a removed stay stays removed.
+      watch.items = loadWatchItems();
+
+      const item = watch.items.find(other => other.id === stay.id);
+
+      if (item) {
+        Object.assign(item, result, { checked: Date.now() });
+        saveWatch();
+      }
+
+      watch.done++;
+      render();
+    }
+
+    watch.status = 'idle';
+    render();
+  }
+
+  // What rebooking saves: paid minus the latest price, or 0.
+  function watchDrop(item) {
+    return item.status === 'ok' && item.paid > 0 && item.total > 0
+      ? item.paid - item.total
+      : 0;
+  }
+
+  const rebook = item =>
+    upcoming(item) && watchDrop(item) >= Math.max(1, item.paid * WATCH.minDrop);
+
+  // Watched stays worth rebooking, biggest saving first.
+  const rebooks = () => state.watch.items
+    .filter(rebook)
+    .sort((a, b) => watchDrop(b) - watchDrop(a));
+
+  function ago(time) {
+    if (!time) return 'never';
+
+    const minutes = Math.floor((Date.now() - time) / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes} min ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} h ago`;
+
+    const days = Math.floor(hours / 24);
+    return `${days} ${plural(days, 'day', 'days')} ago`;
+  }
+
+  // Chip with the price change since paid, or why there is no price.
+  function watchChip(item) {
+    if (!upcoming(item)) return '<span class="hpt-chip muted">Past stay</span>';
+
+    const currency = item.search.currency;
+    const drop = watchDrop(item);
+
+    return {
+      soldout: '<span class="hpt-chip split">Sold out</span>',
+      gone: '<span class="hpt-chip split">Rate not offered</span>',
+      failed: `<span class="hpt-chip split" title="${html(item.error)}">Check failed</span>`
+    }[item.status] || (rebook(item)
+      ? `<span class="hpt-chip cash">Rebook: −${html(money(drop, currency))}</span>`
+      : Math.abs(drop) >= 1
+        ? `<span class="hpt-chip muted">${drop > 0 ? '−' : '+'}${html(money(Math.abs(drop), currency))}</span>`
+        : '<span class="hpt-chip muted">Same price</span>');
+  }
+
+  let watchMarkup = '';
+
+  function renderWatch() {
+    const watch = state.watch;
+    const root = $('hpt-watch');
+    const checking = watch.status === 'checking';
+    const ahead = watch.items.filter(upcoming);
+    const last = Math.max(0, ...ahead.map(item => item.checked || 0));
+
+    $('hpt-watch-check').disabled = checking;
+    $('hpt-watch-check').hidden = !ahead.length;
+
+    $('hpt-watch-status').textContent = checking
+      ? `Checking stay ${Math.min(watch.done + 1, watch.total)} of ${watch.total}…`
+      : ahead.length
+        ? `Last checked ${ago(last)} · Check now sends ${ahead.length * 2} ` +
+          `${plural(ahead.length * 2, 'request', 'requests')}.`
+        : '';
+
+    const markup = !watch.items.length
+      ? `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.watch}</div>
+          <b>No stays watched yet</b>
+          <p>
+            Open the Rate Inspector on a hotel and click <b>Watch price</b> on the rate
+            you booked or plan to book.
+          </p>
+        </div>
+      `
+      : `
+        <div class="hpt-watch-list">
+          ${[...watch.items]
+            .sort((a, b) =>
+              upcoming(b) - upcoming(a) ||
+              a.search.arrival.localeCompare(b.search.arrival)
+            )
+            .map(item => `
+                <div class="hpt-watch-row${upcoming(item) ? '' : ' past'}">
+                  <div class="hpt-row">
+                    <span class="hpt-name">${html(item.name)}</span>
+                    <b>${html(item.status === 'ok' ? item.price || money(item.total, item.search.currency) : '–')}</b>
+                  </div>
+                  <div class="hpt-cal-sub">
+                    ${html(stay(item.search.arrival, item.search.departure))} · ${html(item.roomName)}
+                  </div>
+                  <div class="hpt-free-sub">
+                    <span class="hpt-all-meta">
+                      ${html(item.rateName)}
+                      ${watchChip(item)}
+                    </span>
+                    <span class="hpt-rate-markup">${html(`Checked ${ago(item.checked)}`)}</span>
+                  </div>
+                  <div class="hpt-watch-foot">
+                    <label class="hpt-settings">
+                      Paid
+                      <input
+                        type="text"
+                        inputmode="decimal"
+                        value="${html(String(Math.round(item.paid)))}"
+                        data-watch-paid="${html(item.id)}"
+                        aria-label="${html(`Paid for ${item.name}, ${item.search.currency}`)}"
+                      >
+                      ${html(item.search.currency)}
+                    </label>
+                    <span class="hpt-links">
+                      ${upcoming(item) ? `
+                        <a
+                          href="${html(rateURL(item, false, null, item.search))}"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >Book ↗</a>
+                      ` : ''}
+                      <button
+                        type="button"
+                        class="hpt-link-btn"
+                        data-unwatch="${html(item.id)}"
+                      >Remove</button>
+                    </span>
+                  </div>
+                </div>
+              `).join('')}
+        </div>
+      `;
+
+    // Rebuilding would drop the focus of a Paid field being edited.
+    const editing = document.activeElement?.matches?.('[data-watch-paid]') &&
+      root.contains(document.activeElement);
+
+    if (markup === watchMarkup || editing) return;
+
+    watchMarkup = markup;
+    root.innerHTML = markup;
   }
 
   // =====================================
@@ -5940,6 +6415,7 @@
         </div>
 
         <span id="hpt-min-badge" class="hpt-badge match hpt-min-badge"></span>
+        <span id="hpt-min-watch" class="hpt-badge match hpt-min-badge"></span>
         <span id="hpt-min-update" class="hpt-badge update hpt-min-badge"></span>
         <span id="hpt-min-progress" class="hpt-min-progress"></span>
 
@@ -6037,6 +6513,18 @@
                   <span id="hpt-rates-chip" class="hpt-chip rates"></span>
                 </span>
                 <span id="hpt-rates-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
+
+            <button class="hpt-tool" type="button" data-view="watch">
+              <span class="hpt-tool-icon watch">${ICON.watch}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Price Watch</b>
+                  <span id="hpt-watch-chip" class="hpt-chip cash"></span>
+                </span>
+                <span id="hpt-watch-sub" class="hpt-tool-sub"></span>
               </span>
               ${ICON.chevron}
             </button>
@@ -6145,6 +6633,21 @@
                   role="switch"
                   data-tool="rates"
                   aria-label="Rate Inspector"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small watch">${ICON.watch}</span>
+                <span class="hpt-tool-text">
+                  <b>Price Watch</b>
+                  <span id="hpt-watch-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="watch"
+                  aria-label="Price Watch"
                 >
               </label>
 
@@ -6390,6 +6893,33 @@
             Markup compares the nightly rate. AAA and Senior rates need a membership or ID at check-in.
           </div>
         </div>
+
+        <div id="hpt-view-watch" hidden>
+          <div class="hpt-controls">
+            <div class="hpt-free-intro">
+              Remembers stays you booked or plan to book and checks their rate again whenever
+              you open hilton.com, at most every ${WATCH.everyHours} hours per stay.
+            </div>
+
+            <div class="hpt-split-pick">
+              <span id="hpt-watch-status" class="hpt-hint"></span>
+
+              <button id="hpt-watch-check" class="hpt-primary" type="button">
+                ${ICON.refresh}
+                <span class="hpt-idle">Check now</span>
+                <span class="hpt-busy">Checking…</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="hpt-watch"></div>
+
+          <div class="hpt-footer">
+            Prices are the stay's total as Hilton's room selection shows it, in the currency you
+            searched in. Enter what you paid under <b>Paid</b>. Before cancelling, book the lower
+            rate first and check its cancellation policy.
+          </div>
+        </div>
       </div>
     `;
 
@@ -6438,6 +6968,17 @@
 
       const inspect = event.target.closest('[data-inspect]')?.dataset.inspect;
       if (inspect) openInspector(inspect);
+
+      const watch = event.target.closest('[data-watch]')?.dataset.watch;
+      if (watch) watchRate(watch);
+
+      const unwatch = event.target.closest('[data-unwatch]')?.dataset.unwatch;
+      if (unwatch) unwatchStay(unwatch);
+    });
+
+    panel.addEventListener('change', event => {
+      const id = event.target.dataset?.watchPaid;
+      if (id) setPaid(id, event.target.value);
     });
 
     $('hpt-split-load').onclick = loadSplit;
@@ -6446,6 +6987,7 @@
     $('hpt-cal-range').onchange = event => setCalendarRange(event.target.value);
 
     $('hpt-rate-load').onclick = () => inspectRates();
+    $('hpt-watch-check').onclick = () => checkWatch(true);
     $('hpt-rate-hotel').onchange = event => {
       state.inspect = freshInspect(event.target.value);
       render();
@@ -6585,6 +7127,18 @@
     if (state.update.auto) {
       setTimeout(() => checkUpdate(), UPDATE.startDelay);
     }
+
+    if (state.tools.watch) {
+      setTimeout(() => checkWatch(), WATCH.startDelay);
+    }
+
+    // Stays watched or removed in another tab.
+    addEventListener('storage', event => {
+      if (event.key !== WATCH_KEY || state.watch.status === 'checking') return;
+
+      state.watch.items = loadWatchItems();
+      render();
+    });
   }
  
   if (document.readyState === 'loading') {

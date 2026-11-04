@@ -11,8 +11,9 @@
 // free-nights-points.png, split-idle.png, split-loading.png, split.png,
 // split-certificate.png, home-split.png, calendar-idle.png, calendar-loading.png, calendar.png,
 // calendar-points.png, home-calendar.png, rates-idle.png, rates.png, rates-special.png,
-// rates-room.png, rates-sold-out.png, home-rates.png, minimized.png, home-points-off.png, home-update.png,
-// minimized-update.png and home-installing.png into the output folder.
+// rates-room.png, rates-sold-out.png, home-rates.png, watch.png, watch-drop.png, home-watch.png,
+// minimized.png, home-points-off.png, home-update.png, minimized-update.png, home-installing.png,
+// watch-on-load.png and minimized-watch.png into the output folder.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -117,6 +118,9 @@ const rate = (code, name, amount, deposit, extra = {}) => ({
 
 const POINTS = { MLEHICI: 120000, MLEAIHI: 95000, MLEGSQQ: 80000 };
 
+// Price Watch: Conrad's rates cost this share of their usual price (a drop when below 1).
+let DROP = 1;
+
 // One-night prices for Split Stay, per night from Feb 21 (USD; null = sold out). Hotels not
 // listed cost a flat 1/8 of their stay price. DoubleTree is sold out the last two nights,
 // so DoubleTree then Canopy beats the cheapest single hotel.
@@ -216,14 +220,15 @@ function graphql(body) {
   }
 
   const room = v.selectedRoomTypeCode;
-  LOG.push(`rates ${code} ${room}` + (v.specialRates?.aaa ? ' aaa' : '') + (v.specialRates?.senior ? ' senior' : ''));
+  LOG.push(`rates ${code} ${room}` + (v.specialRates?.aaa ? ' aaa' : '') + (v.specialRates?.senior ? ' senior' : '') +
+    (v.arrivalDate !== '2027-02-21' ? ` ${v.arrivalDate}` : ''));
 
   if (code === 'MLEGSQQ' && room === 'DLX') {
     return { errors: [{ message: 'HTTP 429 Too Many Requests' }] };
   }
 
   // Conrad has every kind of rate for the Rate Inspector; AAA and Senior only when asked for.
-  const scale = room === 'WTR' ? 1.4 : 1;
+  const scale = (room === 'WTR' ? 1.4 : 1) * DROP;
   const conrad = [
     rate('SFX1', 'Semi Flex Rate', 2480 * scale, true),
     rate('SFX2', 'Semi Flex Breakfast', 2790 * scale, true),
@@ -388,6 +393,9 @@ function graphql(body) {
   await page.locator('#hpt-view-rates').screenshot({ path: path.join(outDir, 'rates-room.png') });
   console.log('rates WTR stats:', (await page.textContent('#hpt-rates .hpt-stats')).replace(/\s+/g, ' ').trim());
   await page.uncheck('#hpt-rate-special');
+  // Price Watch: watch the Semi-Flex rate of the water villa.
+  await page.click('#hpt-rates [data-watch^="SFX1|"]');
+  console.log('watching:', await page.textContent('#hpt-rates .hpt-watching'));
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home-rates.png') });
   // From Cash vs. Points: Canopy has no room types (1740).
@@ -402,6 +410,22 @@ function graphql(body) {
   console.log('requests (Rate Inspector):', LOG.slice(inspectorFrom).filter(x => !x.startsWith('shopMulti')));
   await page.click('#hpt-back');
 
+  // Price Watch: the watched stay, then Conrad gets 10 % cheaper and Check now finds it.
+  await page.click('.hpt-tool[data-view="watch"]');
+  await page.locator('#hpt-view-watch').screenshot({ path: path.join(outDir, 'watch.png') });
+  console.log('watch:', (await page.textContent('#hpt-watch .hpt-watch-row')).replace(/\s+/g, ' ').trim());
+  DROP = 0.9;
+  const watchFrom = LOG.length;
+  await page.click('#hpt-watch-check');
+  await page.waitForFunction(() => !document.querySelector('#hpt-watch-check').disabled, null, { timeout: 30000 });
+  await page.locator('#hpt-view-watch').screenshot({ path: path.join(outDir, 'watch-drop.png') });
+  console.log('watch after drop:', (await page.textContent('#hpt-watch .hpt-watch-row')).replace(/\s+/g, ' ').trim());
+  console.log('requests (Price Watch):', LOG.slice(watchFrom));
+  console.log('watch link:', await page.getAttribute('#hpt-watch .hpt-watch-row a', 'href'));
+  DROP = 1;
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-watch.png') });
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -414,10 +438,10 @@ function graphql(body) {
   console.log('status:', await page.textContent('#hpt-status'));
   console.log('requests:', LOG.filter(x => !x.startsWith('hotel_') && !x.startsWith('rates ')));
 
-  // Cash vs. Points, Free Night Finder, Split Stay, Flexible Dates and Rate Inspector switched off: no points or currency requests.
+  // Cash vs. Points, Free Night Finder, Split Stay, Flexible Dates, Rate Inspector and Price Watch switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false, watch: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);
@@ -451,6 +475,33 @@ function graphql(body) {
   await upd.waitForTimeout(300);
   await updPanel.screenshot({ path: path.join(outDir, 'home-installing.png') });
   console.log('requests (update):', LOG.filter(x => x.startsWith('github')));
+
+  // A stay watched on an earlier visit, last checked a day ago: checked again on page load.
+  PUBLISHED = VERSION;
+  DROP = 0.85;
+  LOG.length = 0;
+  const later = await open(() => {
+    localStorage.setItem('hilton-pro-tools-view', 'watch');
+    localStorage.setItem('hilton-pro-tools-watchlist', JSON.stringify([{
+      id: 'stay-1', code: 'MLEHICI', codeUsed: 'MLEHICI', name: 'Conrad Maldives Rangali Island',
+      room: 'BCH', roomName: 'BCH Villa', rate: 'SFX1', rateName: 'Semi Flex Rate', honors: false, special: '',
+      search: { arrival: '2027-04-10', departure: '2027-04-15', adults: 2, children: 0, rooms: 1, currency: 'USD', country: 'DE' },
+      paid: 23212.80, total: 23212.80, price: '$23,212.80', status: 'ok', error: '',
+      added: Date.now() - 86400000, checked: Date.now() - 86400000
+    }, {
+      id: 'stay-2', code: 'MLEAIHI', codeUsed: 'MLEAIHI', name: 'Hilton Maldives Amingiri Resort & Spa',
+      room: 'KNG', roomName: 'KNG Villa', rate: 'BAR', rateName: 'Best Available', honors: false, special: '',
+      search: { arrival: '2027-04-10', departure: '2027-04-15', adults: 2, children: 0, rooms: 1, currency: 'USD', country: 'DE' },
+      paid: 14040, total: 14040, price: '$14,040.00', status: 'ok', error: '',
+      added: Date.now() - 3600000, checked: Date.now() - 3600000
+    }]));
+  });
+  await later.waitForSelector('#hpt-watch .hpt-chip.cash', { timeout: 20000 });
+  await later.locator('#hpt-view-watch').screenshot({ path: path.join(outDir, 'watch-on-load.png') });
+  console.log('watch on load:', await later.$$eval('#hpt-watch .hpt-watch-row', rows => rows.map(r => r.textContent.replace(/\s+/g, ' ').trim())));
+  console.log('requests (Price Watch on load):', LOG.filter(x => x.endsWith('2027-04-10')));
+  await later.click('#hpt-min');
+  await later.locator('#hilton-pro-tools').screenshot({ path: path.join(outDir, 'minimized-watch.png') });
 
   console.log('page errors:', errors.length ? errors : 'none');
   await browser.close();

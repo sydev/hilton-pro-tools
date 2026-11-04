@@ -1,6 +1,6 @@
 # Hilton Pro Tools
 
-Six tools for a normal search on hilton.com, in one small panel:
+Seven tools for a normal search on hilton.com, in one small panel:
 
 - **Resort credit finder:** finds **Semi-Flex** rates with a **deposit required** at hotels that are eligible for the **Resort Credit**.
 - **Cash vs. points:** compares the cash price of every hotel in the search with its points price, based on your own value per point.
@@ -8,6 +8,7 @@ Six tools for a normal search on hilton.com, in one small panel:
 - **Split stay:** finds the cheapest mix of **cash nights, points nights and Free Night Certificates** for your stay, also with one hotel change.
 - **Flexible dates:** compares the same stay with the arrival **a few days earlier or later**, as a hotel × arrival day calendar in cash or points.
 - **Rate inspector:** shows **every rate plan** of a hotel side by side, with deposit, cancellation and the markup over the cheapest rate.
+- **Price watch:** remembers a booked or planned stay and checks its rate again whenever you open hilton.com, so you see when **rebooking** would save money.
 
 The resort credit finder is built for holders of the Hilton Honors American Express Aspire card. The resort credit only applies at certain resorts and only to charges that are actually posted. Finding a matching rate by hand means opening every resort, every room type and every rate plan. This script does that for you.
 
@@ -23,6 +24,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 8. **Split Stay** prices every night of the stay on demand and shows the cheapest mix of cash, points and certificates.
 9. **Flexible Dates** prices the stay on nearby arrival days on demand and shows which day is cheapest at each hotel.
 10. **Rate Inspector** shows every rate plan of one hotel and room type, with what flexibility costs there.
+11. **Price Watch** keeps the rates you clicked **Watch price** on and checks them again on later visits.
 
 ## What counts as a match?
 
@@ -47,6 +49,7 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Split Stay** card: before loading, how many requests it would send; afterwards the cheapest stay (for example *Best: ≈ €1,067 · 6 cash · 2 points*) and what it saves (for example *−€313*).
 - **Flexible Dates** card: before loading, how many requests it would send; afterwards the cheapest arrival (for example *Best: arrive Feb 19 · ≈ €90 a night at …*) and what it saves against your dates (for example *−€180*).
 - **Rate Inspector** card: the inspected hotel and what a refundable rate costs over the cheapest (for example *Conrad …: refundable +12 % over cheapest*), with the number of rates.
+- **Price Watch** card: how many stays are watched and when they were last checked, or the stay to rebook and its new price with what it saves (for example *−$3,250*).
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
 - **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
 - **Settings** (collapsed by default, click to open):
@@ -160,6 +163,18 @@ Hilton's room selection shows many rate plans per room, but not how they compare
 
 Points & Money rates are not included.
 
+## Price watch
+
+Semi-Flex and Flex rates can be cancelled, so when the price of a booked stay drops you can book again at the lower price and cancel the old booking. **Price Watch** notices that for you:
+
+- **Watch price** next to every rate in the Rate Inspector adds that hotel, room type, rate plan, dates, guests and currency to the watchlist, at its current total. Up to 10 stays; *Watching* marks rates already on the list.
+- **Automatic check:** a few seconds after any hilton.com page loads, every upcoming watched stay that was last checked more than 6 hours ago (30 minutes after a failed check) is priced again: one request for its room types, one for the rates of its room type. There is no server, so this only happens while you browse hilton.com.
+- **Check now** checks every upcoming stay right away (the page says how many requests that sends).
+- **Each stay** shows the latest total, the dates, room and rate, when it was last checked and a chip: *Rebook: −$3,250* when the total dropped by at least 1 % below what you paid, otherwise the difference or *Same price*; *Sold out*, *Rate not offered* or *Check failed* when there is no price. Past stays are kept, marked *Past stay* and no longer checked.
+- **Paid:** what you paid for the stay, in the currency you searched in. It starts at the price when you clicked **Watch price**; enter your booked total if it differs.
+- **Book ↗** opens Hilton's room selection for that hotel and those dates; **Remove** takes the stay off the list.
+- **Rebook badge:** the biggest saving also shows on the Price Watch card and, when minimized, next to the panel title (*Rebook: −$3,250*).
+
 ## How it works
 
 - **Read only:** The script observes Hilton's search requests (`/graphql/customer`) to get the hotel list and your search settings (dates, guests, rooms, currency). Hilton's responses are never modified.
@@ -170,6 +185,7 @@ Points & Money rates are not included.
 - **Nightly prices:** Split Stay asks for cash and points prices one night at a time, only when you click **Load nightly prices**, with the same pause between requests as the scan.
 - **Other dates:** Flexible Dates asks for cash and points prices of the moved stays only when you click **Load other dates**, with the same pause between requests.
 - **Rate plans:** the Rate Inspector asks for one hotel at a time, only when you click **Inspect rates** or change the room, and reuses what Resort Finder already loaded.
+- **Watched stays:** Price Watch sends two requests per watched upcoming stay, at most every 6 hours per stay, with the same pause between requests.
 - **Hotel names and exchange rates** come from Hilton's own map request and currency converter. The exchange rates are cached for 12 hours.
 - **New destination:** If you change the destination or dates, results are discarded and the page reloads once so the new search is captured cleanly.
 
@@ -177,7 +193,7 @@ Points & Money rates are not included.
 
 - `@grant none`, runs on `www.hilton.com` only.
 - **No external servers.** All requests go to hilton.com only, using your existing browser session.
-- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view, Rate Inspector's AAA and Senior choice).
+- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view, Rate Inspector's AAA and Senior choice) and the Price Watch list (hotel, room, rate, dates, guests, paid and latest price).
 - In the CSV export, cells that start with `=`, `+`, `-` or `@` get a leading `'`, so Excel and other spreadsheet apps don't run them as formulas.
 
 ## Notes and limitations
