@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.10.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar, rate inspector, suite finder and price watchlist for Hilton searches
+// @version      0.11.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar, rate inspector, suite finder, price watchlist and resort credit tracker for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -43,6 +43,7 @@
   const RATES_SPECIAL_KEY = 'hilton-pro-tools-rates-special';
   const WATCH_KEY = 'hilton-pro-tools-watchlist';
   const SUITES_SHOW_KEY = 'hilton-pro-tools-suites-show';
+  const CREDIT_KEY = 'hilton-pro-tools-resort-credit';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -54,7 +55,8 @@
     calendar: 'Flexible Dates',
     rates: 'Rate Inspector',
     suites: 'Suite Finder',
-    watch: 'Price Watch'
+    watch: 'Price Watch',
+    credit: 'Credit Tracker'
   };
 
   // Description of each tool in the home page's on/off switches.
@@ -66,7 +68,8 @@
     calendar: 'Compares prices for nearby arrival dates',
     rates: 'Shows every rate plan of one hotel side by side',
     suites: 'Finds suites and upgrades with their markup',
-    watch: 'Checks watched stays for a lower price'
+    watch: 'Checks watched stays for a lower price',
+    credit: 'Counts the resort credit used per half year'
   };
 
   // Update check against the published script on GitHub.
@@ -133,6 +136,14 @@
     // A drop of at least this share of the paid price is worth rebooking.
     minDrop: 0.01
   };
+
+  // Credit Tracker: the Aspire card's resort credit, in USD per half year (Jan–Jun, Jul–Dec).
+  const CREDIT = {
+    perHalf: 200,
+    maxEntries: 200,
+    // The home card counts down the days once the half year ends this soon.
+    soonDays: 45
+  };
  
   const nativeFetch = window.fetch.bind(window);
  
@@ -152,7 +163,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true, suites: true, watch: true },
+    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true, suites: true, watch: true, credit: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -187,6 +198,8 @@
     suiteShow: 'suites',
     // Price Watch: watched stays (saved, see loadWatchItems()) and the running check.
     watch: { items: [], status: 'idle', done: 0, total: 0 },
+    // Credit Tracker: credit per half year and the charges booked against it, see loadCredit().
+    credit: { amount: CREDIT.perHalf, entries: [] },
     // Hilton's conversion factors by currency code, see loadCurrencies().
     currencies: null,
     currencyError: '',
@@ -2991,6 +3004,18 @@
     #hilton-pro-tools .hpt-watch-foot .hpt-settings { gap: 6px; }
     #hilton-pro-tools .hpt-watch-foot .hpt-settings input { width: 92px; }
 
+    /* Credit Tracker page. */
+    .hpt-chip.credit { background: #e0e7ff; color: #3730a3; }
+    .hpt-stat.credit { background: #eef2ff; }
+    .hpt-stat.credit b, .hpt-stat.credit span { color: #3730a3; }
+    #hilton-pro-tools .hpt-rate-pick input { flex: 1; min-width: 0; width: auto; }
+    .hpt-credit-field > span:first-child { width: 52px; }
+    #hilton-pro-tools .hpt-split-pick .hpt-credit-field { flex: 1; min-width: 0; }
+    .hpt-credit-bar { margin-top: 8px; height: 6px; }
+    .hpt-credit-bar > div { background: #4f46e5; }
+    .hpt-credit-half { padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: 12px; color: #475569; }
+    .hpt-credit-half b { color: #0f172a; font-weight: 600; white-space: nowrap; }
+
     #hilton-pro-tools .hpt-back { width: 36px; height: 36px; margin-left: -6px; background: none; }
     #hilton-pro-tools .hpt-back:hover { background: #f1f5f9; }
     .hpt-tools { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -3027,6 +3052,7 @@
     .hpt-tool-icon.rates { background: #fef9c3; color: #854d0e; }
     .hpt-tool-icon.watch { background: #cffafe; color: #155e75; }
     .hpt-tool-icon.suites { background: #fae8ff; color: #86198f; }
+    .hpt-tool-icon.credit { background: #e0e7ff; color: #3730a3; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -3232,6 +3258,7 @@
     rates: svg(20, '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
     suites: svg(20, '<path d="m3 8 4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>'),
     watch: svg(20, '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+    credit: svg(20, '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
 
@@ -4588,7 +4615,9 @@
         .classList.toggle('off', !on);
       $(`hpt-${tool}-state`).textContent = on
         ? TOOL_INFO[tool]
-        : 'Off · sends no requests';
+        : tool === 'credit'
+          ? 'Off · hidden from the home page'
+          : 'Off · sends no requests';
     }
 
     const on = Object.values(state.tools).filter(Boolean).length;
@@ -4786,6 +4815,19 @@
             `checked ${ago(Math.max(...ahead.map(item => item.checked || 0)))}`
           : 'Watch a rate from the Rate Inspector';
 
+    const credit = creditNow();
+
+    $('hpt-credit-chip').textContent = credit.left > 0
+      ? `${usdExact(credit.left)} left`
+      : 'Used up';
+
+    $('hpt-credit-sub').textContent = credit.left > 0
+      ? `${credit.label}: ${usdExact(credit.used)} of ${usd(state.credit.amount)} used · ` +
+        (credit.days <= CREDIT.soonDays
+          ? `expires in ${credit.days} ${plural(credit.days, 'day', 'days')}`
+          : `until ${shortDate(credit.end)}`)
+      : `${credit.label} used up · next credit from ${shortDate(credit.next)}`;
+
     const top = state.tools.resort && topFind();
 
     $('hpt-top').hidden = !top;
@@ -4947,6 +4989,7 @@
     renderRates();
     renderSuites();
     renderWatch();
+    renderCredit();
 
     const root = $('hpt-results');
 
@@ -6656,13 +6699,18 @@
   }
 
   // Accepts "1234.50", "1,234.50" and "1234,50".
-  function setPaid(id, value) {
+  function parseAmount(value) {
     const text = String(value).replace(/[^\d.,]/g, '');
-    const paid = parseFloat(
+
+    return parseFloat(
       /,\d{1,2}$/.test(text) && !text.includes('.')
         ? text.replace(',', '.')
         : text.replace(/,/g, '')
     );
+  }
+
+  function setPaid(id, value) {
+    const paid = parseAmount(value);
 
     state.watch.items = loadWatchItems();
 
@@ -6921,6 +6969,238 @@
     if (markup === watchMarkup || editing) return;
 
     watchMarkup = markup;
+    root.innerHTML = markup;
+  }
+
+  // =====================================
+  // Credit Tracker
+  // =====================================
+
+  // Credit per half year and the charges booked against it ({ id, date, hotel, amount } in USD),
+  // from localStorage.
+  function loadCredit() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CREDIT_KEY));
+
+      return {
+        amount: saved?.amount > 0 ? saved.amount : CREDIT.perHalf,
+        entries: Array.isArray(saved?.entries)
+          ? saved.entries.filter(entry =>
+              entry?.id && /^\d{4}-\d{2}-\d{2}$/.test(entry.date) && entry.amount > 0
+            )
+          : []
+      };
+    } catch {
+      return { amount: CREDIT.perHalf, entries: [] };
+    }
+  }
+
+  state.credit = loadCredit();
+
+  function saveCredit() {
+    try {
+      localStorage.setItem(CREDIT_KEY, JSON.stringify(state.credit));
+    } catch {}
+  }
+
+  // The half year an ISO date falls in: its key, label, last day and the day the next one starts.
+  function creditHalf(date) {
+    const year = Number(date.slice(0, 4));
+    const first = Number(date.slice(5, 7)) <= 6;
+
+    return {
+      key: `${year}-${first ? 1 : 2}`,
+      label: first ? `Jan – Jun ${year}` : `Jul – Dec ${year}`,
+      end: first ? `${year}-06-30` : `${year}-12-31`,
+      next: first ? `${year}-07-01` : `${year + 1}-01-01`
+    };
+  }
+
+  // The current half year with what was used and what is left.
+  function creditNow() {
+    const half = creditHalf(today());
+    const entries = state.credit.entries.filter(entry => creditHalf(entry.date).key === half.key);
+    const used = entries.reduce((sum, entry) => sum + entry.amount, 0);
+
+    return {
+      ...half,
+      entries,
+      used,
+      left: Math.max(0, state.credit.amount - used),
+      days: Math.round((Date.parse(half.end) - Date.parse(today())) / 86400000) + 1
+    };
+  }
+
+  // Earlier and later half years with charges, newest first.
+  function creditOther() {
+    const current = creditHalf(today()).key;
+    const halves = new Map();
+
+    for (const entry of state.credit.entries) {
+      const half = creditHalf(entry.date);
+      if (half.key === current) continue;
+
+      const row = halves.get(half.key) || { ...half, used: 0, count: 0 };
+      row.used += entry.amount;
+      row.count++;
+      halves.set(half.key, row);
+    }
+
+    return [...halves.values()].sort((a, b) => b.key.localeCompare(a.key));
+  }
+
+  function addCredit() {
+    const date = $('hpt-credit-date').value || today();
+    const amount = parseAmount($('hpt-credit-amount').value);
+
+    if (!state.tools.credit || !(amount > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      $('hpt-credit-amount').focus();
+      return;
+    }
+
+    // Another tab may have changed the list.
+    state.credit = loadCredit();
+
+    if (state.credit.entries.length < CREDIT.maxEntries) {
+      state.credit.entries.push({
+        id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+        date,
+        hotel: $('hpt-credit-hotel').value.trim().slice(0, 80),
+        amount: Math.round(amount * 100) / 100
+      });
+
+      saveCredit();
+    }
+
+    $('hpt-credit-hotel').value = '';
+    $('hpt-credit-date').value = today();
+    $('hpt-credit-amount').value = '';
+    render();
+  }
+
+  function removeCredit(id) {
+    state.credit = loadCredit();
+    state.credit.entries = state.credit.entries.filter(entry => entry.id !== id);
+    saveCredit();
+    render();
+  }
+
+  function setCreditAmount(value) {
+    const amount = parseAmount(value);
+
+    state.credit = loadCredit();
+
+    if (amount > 0) {
+      state.credit.amount = Math.round(amount);
+      saveCredit();
+    }
+
+    render();
+  }
+
+  // Resort Credit hotels of the current search, offered as hotel names when adding a charge.
+  const creditHotels = () => [...state.hotels.values()]
+    .filter(hotel => hotel.name && state.resorts?.has(hotel.code))
+    .map(hotel => hotel.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  const usd = value => money(value, 'USD');
+
+  // Amounts with cents only when they have some.
+  const usdExact = value => Number.isInteger(value)
+    ? usd(value)
+    : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+
+  let creditMarkup = '';
+
+  function renderCredit() {
+    const now = creditNow();
+    const other = creditOther();
+    const total = state.credit.amount;
+    const share = total > 0 ? Math.min(1, now.used / total) : 0;
+    const root = $('hpt-credit');
+
+    if (document.activeElement !== $('hpt-credit-total')) {
+      $('hpt-credit-total').value = String(total);
+    }
+
+    if (!$('hpt-credit-date').value) $('hpt-credit-date').value = today();
+
+    const options = creditHotels()
+      .map(name => `<option value="${html(name)}"></option>`)
+      .join('');
+
+    if ($('hpt-credit-hotels').innerHTML !== options) {
+      $('hpt-credit-hotels').innerHTML = options;
+    }
+
+    const markup = `
+      <div class="hpt-split-stats">
+        <div class="hpt-stats">
+          <div class="hpt-stat ${now.left > 0 ? 'credit' : 'good'}">
+            <b>${html(now.left > 0 ? usdExact(now.left) : 'Used up')}</b>
+            <span>${now.left > 0
+              ? `left until ${html(shortDate(now.end))} · ${now.days} ${plural(now.days, 'day', 'days')}`
+              : `next credit from ${html(shortDate(now.next))}`}</span>
+          </div>
+          <div class="hpt-stat">
+            <b>${html(usdExact(now.used))}</b>
+            <span>of ${html(usd(total))} used · ${html(now.label)}</span>
+          </div>
+        </div>
+        <div class="hpt-bar hpt-credit-bar">
+          <div style="width: ${Math.round(share * 100)}%"></div>
+        </div>
+      </div>
+
+      ${now.entries.length ? `
+        <div class="hpt-watch-list">
+          ${[...now.entries]
+            .sort((a, b) => b.date.localeCompare(a.date))
+            .map(entry => `
+              <div class="hpt-watch-row">
+                <div class="hpt-row">
+                  <span class="hpt-name">${html(entry.hotel || 'Resort credit')}</span>
+                  <b>${html(usdExact(entry.amount))}</b>
+                </div>
+                <div class="hpt-free-sub">
+                  <span class="hpt-cal-sub">${html(shortDate(entry.date))}</span>
+                  <button
+                    type="button"
+                    class="hpt-link-btn"
+                    data-uncredit="${html(entry.id)}"
+                  >Remove</button>
+                </div>
+              </div>
+            `).join('')}
+        </div>
+      ` : `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.credit}</div>
+          <b>Nothing used in ${html(now.label)}</b>
+          <p>
+            After a stay, add what the resort charged to your Aspire card for food,
+            drinks or spa, up to ${html(usd(total))} this half year.
+          </p>
+        </div>
+      `}
+
+      ${other.length ? `
+        <div class="hpt-all">
+          <div class="hpt-all-title">Other half years</div>
+          ${other.map(half => `
+            <div class="hpt-row hpt-credit-half">
+              <span>${html(half.label)} · ${half.count} ${plural(half.count, 'charge', 'charges')}</span>
+              <b>${html(usdExact(half.used))} of ${html(usd(total))}</b>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    `;
+
+    if (markup === creditMarkup) return;
+
+    creditMarkup = markup;
     root.innerHTML = markup;
   }
 
@@ -7194,6 +7474,18 @@
               </span>
               ${ICON.chevron}
             </button>
+
+            <button class="hpt-tool" type="button" data-view="credit">
+              <span class="hpt-tool-icon credit">${ICON.credit}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Credit Tracker</b>
+                  <span id="hpt-credit-chip" class="hpt-chip credit"></span>
+                </span>
+                <span id="hpt-credit-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
           </div>
 
           <div id="hpt-top" class="hpt-section" hidden>
@@ -7329,6 +7621,21 @@
                   role="switch"
                   data-tool="watch"
                   aria-label="Price Watch"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small credit">${ICON.credit}</span>
+                <span class="hpt-tool-text">
+                  <b>Credit Tracker</b>
+                  <span id="hpt-credit-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="credit"
+                  aria-label="Credit Tracker"
                 >
               </label>
 
@@ -7638,6 +7945,70 @@
             rate first and check its cancellation policy.
           </div>
         </div>
+
+        <div id="hpt-view-credit" hidden>
+          <form id="hpt-credit-form" class="hpt-controls" autocomplete="off">
+            <div class="hpt-free-intro">
+              Counts how much of the Aspire card's resort credit you used. It renews on Jan 1
+              and Jul 1 and can't be read from Hilton, so add each charge yourself.
+            </div>
+
+            <label class="hpt-settings hpt-rate-pick hpt-credit-field">
+              <span>Hotel</span>
+              <input
+                id="hpt-credit-hotel"
+                type="text"
+                list="hpt-credit-hotels"
+                placeholder="Optional"
+                aria-label="Hotel"
+              >
+              <datalist id="hpt-credit-hotels"></datalist>
+            </label>
+
+            <label class="hpt-settings hpt-rate-pick hpt-credit-field">
+              <span>Date</span>
+              <input id="hpt-credit-date" type="date" aria-label="Date of the charge">
+            </label>
+
+            <div class="hpt-split-pick">
+              <label class="hpt-settings hpt-rate-pick hpt-credit-field">
+                <span>Amount</span>
+                <input
+                  id="hpt-credit-amount"
+                  type="text"
+                  inputmode="decimal"
+                  placeholder="USD"
+                  aria-label="Amount in USD"
+                >
+              </label>
+
+              <button id="hpt-credit-add" class="hpt-primary" type="submit">
+                ${ICON.plus}
+                <span>Add charge</span>
+              </button>
+            </div>
+          </form>
+
+          <div id="hpt-credit"></div>
+
+          <div class="hpt-controls">
+            <label class="hpt-settings">
+              Credit per half year
+              <input
+                id="hpt-credit-total"
+                type="text"
+                inputmode="decimal"
+                aria-label="Resort credit per half year in USD"
+              >
+              USD
+            </label>
+          </div>
+
+          <div class="hpt-footer">
+            Saved in this browser only. Amounts are in US dollars, as on your card statement;
+            the credit is used once the charge posts to your Aspire card at the hotel.
+          </div>
+        </div>
       </div>
     `;
 
@@ -7695,6 +8066,9 @@
 
       const unwatch = event.target.closest('[data-unwatch]')?.dataset.unwatch;
       if (unwatch) unwatchStay(unwatch);
+
+      const uncredit = event.target.closest('[data-uncredit]')?.dataset.uncredit;
+      if (uncredit) removeCredit(uncredit);
     });
 
     panel.addEventListener('change', event => {
@@ -7714,6 +8088,11 @@
       render();
     };
     $('hpt-watch-check').onclick = () => checkWatch(true);
+    $('hpt-credit-form').onsubmit = event => {
+      event.preventDefault();
+      addCredit();
+    };
+    $('hpt-credit-total').onchange = event => setCreditAmount(event.target.value);
     $('hpt-rate-hotel').onchange = event => {
       state.inspect = freshInspect(event.target.value);
       render();
@@ -7858,8 +8237,13 @@
       setTimeout(() => checkWatch(), WATCH.startDelay);
     }
 
-    // Stays watched or removed in another tab.
+    // Stays watched or removed and charges added in another tab.
     addEventListener('storage', event => {
+      if (event.key === CREDIT_KEY) {
+        state.credit = loadCredit();
+        render();
+      }
+
       if (event.key !== WATCH_KEY || state.watch.status === 'checking') return;
 
       state.watch.items = loadWatchItems();

@@ -17,7 +17,7 @@ Possible further tools for Hilton Pro Tools, ordered by value and effort. Each b
 ## Nice to have
 
 7. **All-in price.** Include resort fee and taxes so Cash vs. Points compares fairly. Award stays have no resort fee, which often shifts the valuation noticeably.
-8. **Resort credit tracker.** A small counter of how much of the semi-annual credit is used. It can't fill itself automatically, so low value.
+8. **Resort credit tracker** *(done in 0.11.0 as Credit Tracker)*. A small counter of how much of the semi-annual credit is used. It can't fill itself automatically, so low value.
 
 ## Suggested order
 

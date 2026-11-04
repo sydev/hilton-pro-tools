@@ -27,6 +27,7 @@ The resort credit finder is built for holders of the Hilton Honors American Expr
 10. **Rate Inspector** shows every rate plan of one hotel and room type, with what flexibility costs there.
 11. **Suite Finder** loads the room types of the hotels on demand and shows their suites with the markup in cash and points.
 12. **Price Watch** keeps the rates you clicked **Watch price** on and checks them again on later visits.
+13. **Credit Tracker** counts the resort credit you used this half year from the charges you add.
 
 ## What counts as a match?
 
@@ -53,6 +54,7 @@ The header shows the open page and your stay (for example *Feb 21 → Mar 1, 202
 - **Rate Inspector** card: the inspected hotel and what a refundable rate costs over the cheapest (for example *Conrad …: refundable +12 % over cheapest*), with the number of rates.
 - **Suite Finder** card: before loading, how many requests it would send; afterwards how many suites were found (for example *4 suites*) and the best one: a suite at no extra points, else the cheapest upgrade (for example *Best: Water Villa +50 % · …*).
 - **Price Watch** card: how many stays are watched and when they were last checked, or the stay to rebook and its new price with what it saves (for example *−$3,250*).
+- **Credit Tracker** card: what is left of the resort credit this half year (for example *$114.50 left*) and how much was used; in the last 45 days of a half year it counts down the days (*expires in 27 days*).
 - **Top find:** the cheapest Semi-Flex match of all resorts, with the points comparison.
 - **Loading indicator:** a spinner on a card's icon shows that the tool is still loading or scanning.
 - **Settings** (collapsed by default, click to open):
@@ -196,6 +198,16 @@ Semi-Flex and Flex rates can be cancelled, so when the price of a booked stay dr
 - **Book ↗** opens Hilton's room selection for that hotel and those dates; **Remove** takes the stay off the list.
 - **Rebook badge:** the biggest saving also shows on the Price Watch card and, when minimized, next to the panel title (*Rebook: −$3,250*).
 
+## Credit tracker
+
+The Aspire card's resort credit is $200 per half year (January – June and July – December) for charges at Resort Credit hotels. Hilton doesn't show how much of it you used, so **Credit Tracker** keeps count from what you enter:
+
+- **Add charge:** the hotel (optional; the Resort Credit hotels of your current search are suggested), the date and the amount in USD as on your card statement. The date decides which half year the charge counts for.
+- **This half year:** what is left and until when, what was used out of the credit, a bar and every charge with **Remove**.
+- **Other half years:** what was used in each earlier (or later) half year with charges.
+- **Credit per half year:** $200 by default; change it if your card terms differ.
+- The tool sends no requests. Turning it off only hides its card; the charges stay saved.
+
 ## How it works
 
 - **Read only:** The script observes Hilton's search requests (`/graphql/customer`) to get the hotel list and your search settings (dates, guests, rooms, currency). Hilton's responses are never modified.
@@ -215,7 +227,7 @@ Semi-Flex and Flex rates can be cancelled, so when the price of a booked stay dr
 
 - `@grant none`, runs on `www.hilton.com` only.
 - **No external servers.** All requests go to hilton.com only, using your existing browser session.
-- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view, Rate Inspector's AAA and Senior choice, Suite Finder's view) and the Price Watch list (hotel, room, rate, dates, guests, paid and latest price).
+- In `localStorage` the script stores only the official resort list (cached for 30 days), the exchange rates (cached for 12 hours) and your settings (auto scan, point value, currency, tool switches, Free Night Finder ranking, Split Stay certificates, Flexible Dates range and view, Rate Inspector's AAA and Senior choice, Suite Finder's view), the Price Watch list (hotel, room, rate, dates, guests, paid and latest price) and the Credit Tracker charges (hotel, date, amount) with the credit per half year.
 - In the CSV export, cells that start with `=`, `+`, `-` or `@` get a leading `'`, so Excel and other spreadsheet apps don't run them as formulas.
 
 ## Notes and limitations

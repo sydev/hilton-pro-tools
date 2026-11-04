@@ -13,6 +13,7 @@
 // calendar-points.png, home-calendar.png, rates-idle.png, rates.png, rates-special.png,
 // rates-room.png, rates-sold-out.png, home-rates.png, watch.png, watch-drop.png, home-watch.png,
 // suites-idle.png, suites-loading.png, suites.png, suites-all.png, home-suites.png,
+// credit-empty.png, credit.png, home-credit.png,
 // minimized.png, home-points-off.png, home-update.png, minimized-update.png, home-installing.png,
 // watch-on-load.png and minimized-watch.png into the output folder.
 const fs = require('fs');
@@ -496,6 +497,29 @@ function graphql(body) {
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home-suites.png') });
 
+  // Credit Tracker: no requests; one charge this half year, one in the last one.
+  const creditFrom = LOG.length;
+  await page.click('.hpt-tool[data-view="credit"]');
+  await page.locator('#hpt-view-credit').screenshot({ path: path.join(outDir, 'credit-empty.png') });
+  console.log('credit hotels:', await page.$$eval('#hpt-credit-hotels option', options => options.map(o => o.value)));
+  await page.fill('#hpt-credit-hotel', 'Conrad Maldives Rangali Island');
+  await page.fill('#hpt-credit-amount', '85,50');
+  await page.click('#hpt-credit-add');
+  const lastHalf = await page.evaluate(() => {
+    const day = new Date();
+    day.setMonth(day.getMonth() - 6);
+    return day.toISOString().slice(0, 10);
+  });
+  await page.fill('#hpt-credit-date', lastHalf);
+  await page.fill('#hpt-credit-amount', '200');
+  await page.press('#hpt-credit-amount', 'Enter');
+  await page.locator('#hpt-view-credit').screenshot({ path: path.join(outDir, 'credit.png') });
+  console.log('credit:', (await page.textContent('#hpt-credit')).replace(/\s+/g, ' ').trim());
+  console.log('requests (Credit Tracker):', LOG.slice(creditFrom));
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-credit.png') });
+  console.log('credit card:', await page.textContent('#hpt-credit-chip'), '|', await page.textContent('#hpt-credit-sub'));
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -508,10 +532,10 @@ function graphql(body) {
   console.log('status:', await page.textContent('#hpt-status'));
   console.log('requests:', LOG.filter(x => !x.startsWith('hotel_') && !x.startsWith('rates ')));
 
-  // Cash vs. Points, Free Night Finder, Split Stay, Flexible Dates, Rate Inspector and Price Watch switched off: no points or currency requests.
+  // Every tool but Resort Finder switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false, suites: false, watch: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false, suites: false, watch: false, credit: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

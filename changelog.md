@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- **Credit Tracker:** a ninth tool that counts how much of the Aspire card's resort credit you used this half year (Jan – Jun, Jul – Dec). Add each charge with its hotel (the Resort Credit hotels of your search are suggested), date and amount in USD; the page shows what is left, until when, and the half years before.
+- **Credit per half year:** $200 by default, editable for other card terms (saved).
+- **Credit Tracker card and switch:** the home card shows what is left (for example *$114.50 left*) and counts down the days in the last weeks of a half year; Settings has its on/off switch. It never sends requests; everything is saved in this browser only.
+
 ## 0.10.0
 
 ### Added
