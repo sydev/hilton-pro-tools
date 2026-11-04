@@ -12,6 +12,7 @@
 // split-certificate.png, home-split.png, calendar-idle.png, calendar-loading.png, calendar.png,
 // calendar-points.png, home-calendar.png, rates-idle.png, rates.png, rates-special.png,
 // rates-room.png, rates-sold-out.png, home-rates.png, watch.png, watch-drop.png, home-watch.png,
+// suites-idle.png, suites-loading.png, suites.png, suites-all.png, home-suites.png,
 // minimized.png, home-points-off.png, home-update.png, minimized-update.png, home-installing.png,
 // watch-on-load.png and minimized-watch.png into the output folder.
 const fs = require('fs');
@@ -97,8 +98,29 @@ const LOG = [];
 const rooms = {
   MLEAIHI: ['KNG', 'VIL'],
   MLEGSQQ: ['STD', 'DLX', 'STE'],
-  MLEHICI: ['BCH', 'WTR'],
+  MLEHICI: ['BCH', 'WTR', 'SUN'],
   MLEONWA: []
+};
+const ROOM_NAMES = {
+  KNG: 'King Lagoon View Room',
+  VIL: 'Beach Pool Villa',
+  STD: 'Standard King',
+  DLX: 'Deluxe Ocean View',
+  STE: 'One Bedroom Suite',
+  BCH: 'Beach Villa',
+  WTR: 'Water Villa',
+  SUN: 'Sunset Water Suite'
+};
+// Suite Finder: lowest reward per night by room type. The Beach Pool Villa has none; Conrad's
+// Water Villa costs no more points than its Beach Villa.
+const REWARDS = {
+  KNG: { points: 95000 },
+  STD: { points: 80000 },
+  DLX: { points: 95000, premium: true },
+  STE: { points: 150000, premium: true },
+  BCH: { points: 120000 },
+  WTR: { points: 120000 },
+  SUN: { points: 180000, premium: true }
 };
 
 const rate = (code, name, amount, deposit, extra = {}) => ({
@@ -201,6 +223,29 @@ function graphql(body) {
     return { data: { hotel: { ctyhocn: code, shopAvail: { statusCode: 1740, roomTypes: [] } } } };
   }
 
+  if (/redemptionRoomRates/.test(body.query || '')) {
+    LOG.push(`room points ${code}`);
+    return {
+      data: {
+        hotel: {
+          ctyhocn: code,
+          shopAvail: {
+            statusCode: 0,
+            roomTypes: rooms[code].map(r => ({
+              roomTypeCode: r,
+              roomTypeName: ROOM_NAMES[r],
+              redemptionRoomRates: REWARDS[r] ? [{
+                ratePlanCode: 'HHONORS',
+                ratePlan: { ratePlanName: REWARDS[r].premium ? 'Premium Room Reward' : 'Standard Room Reward' },
+                pointDetails: Array(8).fill({ pointsRate: REWARDS[r].points })
+              }] : []
+            }))
+          }
+        }
+      }
+    };
+  }
+
   if (!v.selectedRoomTypeCode) {
     return {
       data: {
@@ -210,7 +255,7 @@ function graphql(body) {
             statusCode: 0,
             roomTypes: rooms[code].map((r, i) => ({
               roomTypeCode: r,
-              roomTypeName: `${r} Villa`,
+              roomTypeName: ROOM_NAMES[r],
               quickBookRate: { rateAmount: 1000 + i * 500, ratePlanCode: 'BAR' }
             }))
           }
@@ -247,7 +292,7 @@ function graphql(body) {
         ctyhocn: code,
         shopAvail: {
           statusCode: 0,
-          roomTypes: [{ roomTypeCode: room, roomTypeName: `${room} Villa`, roomOnlyRates: rates }]
+          roomTypes: [{ roomTypeCode: room, roomTypeName: ROOM_NAMES[room], roomOnlyRates: rates }]
         }
       }
     }
@@ -426,6 +471,31 @@ function graphql(body) {
   await page.click('#hpt-back');
   await panel.screenshot({ path: path.join(outDir, 'home-watch.png') });
 
+  // Suite Finder: room types from the scan, points prices per hotel.
+  const suitesFrom = LOG.length;
+  await page.click('.hpt-tool[data-view="suites"]');
+  await page.locator('#hpt-view-suites').screenshot({ path: path.join(outDir, 'suites-idle.png') });
+  console.log('suites idle:', await page.textContent('#hpt-suite-status'));
+  await page.click('#hpt-suite-load');
+  await page.waitForTimeout(1500);
+  await page.locator('#hpt-view-suites').screenshot({ path: path.join(outDir, 'suites-loading.png') });
+  await page.waitForFunction(() => !document.querySelector('#hpt-suite-load').disabled, null, { timeout: 60000 });
+  await page.locator('#hpt-view-suites').screenshot({ path: path.join(outDir, 'suites.png') });
+  console.log('suites:', await page.$$eval('#hpt-suites .hpt-suite-hotel', rows => rows.map(r => r.textContent.replace(/\s+/g, ' ').trim())));
+  console.log('suites empty:', await page.$$eval('#hpt-suites .hpt-free-off', rows => rows.map(r => r.textContent.replace(/\s+/g, ' ').trim())));
+  await page.click('[data-suite-show="all"]');
+  await page.locator('#hpt-view-suites').screenshot({ path: path.join(outDir, 'suites-all.png') });
+  await page.click('[data-suite-show="suites"]');
+  console.log('requests (Suite Finder):', LOG.slice(suitesFrom));
+  console.log('suites reload label:', await page.textContent('#hpt-suite-label'));
+  // Rates of a suite open the Rate Inspector on that room.
+  await page.click('#hpt-suites [data-inspect-room="SUN"]');
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => !document.querySelector('#hpt-rate-load').disabled, null, { timeout: 30000 });
+  console.log('inspector from suite:', await page.inputValue('#hpt-rate-hotel'), await page.inputValue('#hpt-rate-room'));
+  await page.click('#hpt-back');
+  await panel.screenshot({ path: path.join(outDir, 'home-suites.png') });
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#hpt-csv')]);
   const csv = fs.readFileSync(await download.path(), 'utf8').split('\r\n');
   console.log(csv[0]);
@@ -441,7 +511,7 @@ function graphql(body) {
   // Cash vs. Points, Free Night Finder, Split Stay, Flexible Dates, Rate Inspector and Price Watch switched off: no points or currency requests.
   LOG.length = 0;
   const off = await open(() => {
-    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false, watch: false }));
+    localStorage.setItem('hilton-pro-tools-tools', JSON.stringify({ resort: true, points: false, free: false, split: false, calendar: false, rates: false, suites: false, watch: false }));
     localStorage.removeItem('hilton-pro-tools-view');
   });
   await off.waitForTimeout(6000);

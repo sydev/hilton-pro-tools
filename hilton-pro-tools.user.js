@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hilton Pro Tools
 // @namespace    hilton-pro-tools
-// @version      0.9.0
-// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar, rate inspector and price watchlist for Hilton searches
+// @version      0.10.0
+// @description  Aspire resort credit finder (Semi-Flex deposit rates), cash vs. points comparison, Free Night Certificate finder, split stay optimizer, flexible dates calendar, rate inspector, suite finder and price watchlist for Hilton searches
 // @author       sydev
 // @license      MIT
 // @homepageURL  https://github.com/sydev/hilton-pro-tools
@@ -42,6 +42,7 @@
   const CALENDAR_MODE_KEY = 'hilton-pro-tools-calendar-mode';
   const RATES_SPECIAL_KEY = 'hilton-pro-tools-rates-special';
   const WATCH_KEY = 'hilton-pro-tools-watchlist';
+  const SUITES_SHOW_KEY = 'hilton-pro-tools-suites-show';
 
   // Panel pages: the home overview and one page per tool.
   const VIEWS = {
@@ -52,6 +53,7 @@
     split: 'Split Stay',
     calendar: 'Flexible Dates',
     rates: 'Rate Inspector',
+    suites: 'Suite Finder',
     watch: 'Price Watch'
   };
 
@@ -63,6 +65,7 @@
     split: 'Mixes cash, points and certificates night by night',
     calendar: 'Compares prices for nearby arrival dates',
     rates: 'Shows every rate plan of one hotel side by side',
+    suites: 'Finds suites and upgrades with their markup',
     watch: 'Checks watched stays for a lower price'
   };
 
@@ -113,6 +116,13 @@
     defaultShift: 2
   };
 
+  // Suite Finder loads on demand: room types and their points prices, two requests per hotel.
+  const SUITES = {
+    maxHotels: 10,
+    // Upgrades shown per hotel; the rest are on Hilton.
+    maxShown: 6
+  };
+
   // Price Watch re-prices watched stays when a hilton.com page loads: two requests per stay.
   const WATCH = {
     maxStays: 10,
@@ -142,7 +152,7 @@
     // Key of VIEWS shown in the panel.
     view: 'home',
     // Tools switched on by the user; a tool that is off sends no requests.
-    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true, watch: true },
+    tools: { resort: true, points: true, free: true, split: true, calendar: true, rates: true, suites: true, watch: true },
     // Captured search pages ({ codes, input }), to load points prices
     // when Cash vs. Points is switched on later.
     batches: [],
@@ -171,6 +181,10 @@
     plans: new Map(),
     // Rate Inspector also asks for AAA and Senior rates.
     inspectSpecial: false,
+    // Suite Finder: room types with cash and points prices per hotel, see loadSuites().
+    suites: freshSuites(),
+    // Suite Finder shows suites and villas ('suites') or every pricier room type ('all').
+    suiteShow: 'suites',
     // Price Watch: watched stays (saved, see loadWatchItems()) and the running check.
     watch: { items: [], status: 'idle', done: 0, total: 0 },
     // Hilton's conversion factors by currency code, see loadCurrencies().
@@ -213,6 +227,8 @@
     if (localStorage.getItem(CALENDAR_MODE_KEY) === 'points') state.calendarMode = 'points';
 
     state.inspectSpecial = localStorage.getItem(RATES_SPECIAL_KEY) === 'on';
+
+    if (localStorage.getItem(SUITES_SHOW_KEY) === 'all') state.suiteShow = 'all';
 
     state.update.auto = localStorage.getItem(UPDATE_AUTO_KEY) !== 'off';
     state.update.skipped = savedUpdate().skipped || null;
@@ -310,6 +326,7 @@
     state.calendar = freshCalendar();
     state.inspect = freshInspect(null);
     state.plans.clear();
+    state.suites = freshSuites();
  
     render();
     status(reason);
@@ -1364,6 +1381,31 @@
     }
   `;
  
+  // Every room type with its lowest reward per night, like the room selection with "Use Points".
+  const ROOM_POINTS = `
+    query hotel_shopAvailOptions_shopPropAvail(${V}) {
+      hotel(ctyhocn:$ctyhocn,language:$language) {
+        ctyhocn
+        shopAvail(${INPUT}) {
+          statusCode
+          roomTypes {
+            roomTypeCode
+            roomTypeName
+            redemptionRoomRates(first:1) {
+              ratePlanCode
+              ratePlan {
+                ratePlanName
+              }
+              pointDetails(perNight:true) {
+                pointsRate
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
   // s: the search to price, by default the current one (Price Watch passes a saved stay).
   function variables(code, room, cacheId, s = state.search) {
  
@@ -2924,6 +2966,20 @@
     .hpt-rate-markup.low { color: #166534; }
     .hpt-rate-cxl { font-size: 12px; color: #475569; }
 
+    /* Suite Finder page. */
+    .hpt-chip.suites { background: #fae8ff; color: #86198f; }
+    .hpt-stat.suites { background: #fdf4ff; }
+    .hpt-stat.suites b, .hpt-stat.suites span { color: #86198f; }
+    #hpt-suites .hpt-stat span { overflow-wrap: anywhere; }
+    .hpt-suite-list { border-top: 1px solid #e2e8f0; }
+    .hpt-suite-hotel { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 6px; }
+    .hpt-suite-hotel .hpt-row .hpt-tag { flex: none; white-space: nowrap; }
+    .hpt-suite-base, .hpt-suite-more { font-size: 12px; color: #475569; }
+    .hpt-suite-room { padding-top: 8px; border-top: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 4px; }
+    .hpt-suite-room .hpt-row > b { font-size: 13px; white-space: nowrap; }
+    .hpt-suite-room .hpt-free-sub { align-items: center; }
+    .hpt-suite-name { font-size: 13px; font-weight: 600; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
+
     /* Price Watch page. */
     .hpt-watching { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #155e75; white-space: nowrap; }
     .hpt-watch-list { border-top: 1px solid #e2e8f0; }
@@ -2970,6 +3026,7 @@
     .hpt-tool-icon.calendar { background: #ffe4e6; color: #9f1239; }
     .hpt-tool-icon.rates { background: #fef9c3; color: #854d0e; }
     .hpt-tool-icon.watch { background: #cffafe; color: #155e75; }
+    .hpt-tool-icon.suites { background: #fae8ff; color: #86198f; }
     /* Spinner badge on the icon while the tool is still loading. */
     .hpt-tool[aria-busy="true"] .hpt-tool-icon::after {
       content: '';
@@ -3173,6 +3230,7 @@
     split: svg(20, '<path d="M3 12h6l4-5h8"/><path d="M13 17h8"/><path d="M9 12l4 5"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>'),
     dates: svg(20, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/>'),
     rates: svg(20, '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+    suites: svg(20, '<path d="m3 8 4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>'),
     watch: svg(20, '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
     calendar: svg(24, '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', '#475569', 1.8)
   };
@@ -4538,7 +4596,7 @@
 
     $('hpt-tools').hidden = !on;
     // Point value and currency only matter for points comparisons.
-    const valued = wantsPoints() || state.tools.split || state.tools.calendar;
+    const valued = wantsPoints() || state.tools.split || state.tools.calendar || state.tools.suites;
 
     $('hpt-shared').hidden = !valued;
     $('hpt-shared-note').hidden = !(state.tools.points && state.tools.free);
@@ -4551,6 +4609,9 @@
 
     state.panel.querySelector('.hpt-tool[data-view="rates"]')
       .setAttribute('aria-busy', String(state.inspect.status === 'loading'));
+
+    state.panel.querySelector('.hpt-tool[data-view="suites"]')
+      .setAttribute('aria-busy', String(state.suites.status === 'loading'));
 
     state.panel.querySelector('.hpt-tool[data-view="watch"]')
       .setAttribute('aria-busy', String(state.watch.status === 'checking'));
@@ -4687,6 +4748,26 @@
                       : `refundable ${percent(inspected.flexibility)} over cheapest`)
                 : 'Pick a hotel to compare its rate plans';
 
+    const suites = state.suites;
+    const suiteResult = suiteBlocked() ? null : suiteTable();
+    const [suiteOne, suiteMany] = suiteNoun();
+
+    $('hpt-suites-chip').textContent = suiteResult?.count
+      ? `${suiteResult.count} ${plural(suiteResult.count, suiteOne, suiteMany)}`
+      : '';
+
+    $('hpt-suites-sub').textContent = suiteBlocked()
+      || (suites.status === 'loading'
+        ? `Loading rooms · ${Math.min(suites.done, suites.total)}/${suites.total} requests`
+        : suiteResult.noExtra
+          ? `${suiteResult.noExtra.room.name} at no extra points · ${suiteResult.noExtra.row.name}`
+          : suiteResult.top
+            ? `Best: ${suiteResult.top.upgrades[0].name} ${upgradeCost(suiteResult.top.upgrades[0])} · ` +
+              suiteResult.top.name
+            : suiteResult.empty.length
+              ? `No ${suiteMany} at these hotels`
+              : `Find suites on demand · ${suiteRequests()} requests`);
+
     const watch = state.watch;
     const drops = rebooks();
     const ahead = watch.items.filter(upcoming);
@@ -4770,6 +4851,11 @@
     // Switched off while loading: drop the half loaded inspection.
     if (tool === 'rates' && !on && state.inspect.status === 'loading') {
       state.inspect = freshInspect(state.inspect.code);
+    }
+
+    // Switched off while loading: stop, keeping the picked hotel.
+    if (tool === 'suites' && !on && state.suites.status === 'loading') {
+      state.suites = freshSuites(state.suites.pick);
     }
 
     if (tool === 'watch' && on) checkWatch();
@@ -4859,6 +4945,7 @@
     renderSplit();
     renderCalendar();
     renderRates();
+    renderSuites();
     renderWatch();
 
     const root = $('hpt-results');
@@ -5420,17 +5507,58 @@
     return topFind()?.entry.code || inspectOptions()[0]?.code || null;
   }
 
+  // Room types of a hotel some tool already loaded ({ rooms, codeUsed, cache }), else
+  // { unavailable: true } when the scan found it sold out, else null.
+  function knownRooms(code) {
+    const known = [
+      state.results.get(code),
+      state.inspect.code === code ? state.inspect : null,
+      state.suites.hotels.get(code)
+    ].find(item => item?.rooms);
+
+    if (known) return { rooms: known.rooms, codeUsed: known.codeUsed, cache: known.cache };
+
+    return state.results.get(code)?.unavailable ? { unavailable: true } : null;
+  }
+
+  // Asks for the room types of a hotel, cheapest first. Like the scan, tries the 5-letter
+  // code too. send(values) sends one QUICK request. Returns { rooms, codeUsed, cache },
+  // { unavailable: true } when Hilton reports the hotel sold out (1740), or null.
+  async function loadRoomTypes(code, send) {
+    const aliases = [...new Set([code, ...(code.length > 5 ? [code.slice(0, 5)] : [])])];
+
+    for (const alias of aliases) {
+      const cache = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+      const result = await send(variables(alias, null, cache));
+
+      if (result.unavailable) {
+        if (alias === aliases[aliases.length - 1]) return { unavailable: true };
+        continue;
+      }
+
+      const rooms = (result.shopAvail.roomTypes || [])
+        .filter(item => item.roomTypeCode)
+        .sort((a, b) => referencePrice(a) - referencePrice(b));
+
+      if (result.ctyhocn === code && rooms.length) {
+        return { rooms: rooms.slice(0, CONFIG.maxRooms), codeUsed: alias, cache };
+      }
+    }
+
+    return null;
+  }
+
   // Requests inspectRates() still needs for the chosen hotel and room type.
   function inspectRequests() {
     const code = inspectHotel();
     if (!code) return 0;
 
     const inspect = state.inspect.code === code ? state.inspect : freshInspect(code);
-    const scanned = state.results.get(code);
-    const rooms = inspect.rooms || scanned?.rooms;
+    const known = knownRooms(code);
+    const rooms = inspect.rooms || known?.rooms;
     const room = inspect.room || rooms?.[0]?.roomTypeCode;
 
-    if (inspect.unavailable || scanned?.unavailable) return 0;
+    if (inspect.unavailable || known?.unavailable) return 0;
 
     return (rooms ? 0 : 1) + inspectSpecials().filter(special =>
       !room || !state.plans.has(planKey(code, room, special))
@@ -5480,41 +5608,11 @@
     };
 
     try {
-      const scanned = state.results.get(code);
-
-      if (!inspect.rooms && scanned?.unavailable) inspect.unavailable = true;
-
-      if (!inspect.rooms && scanned?.rooms) {
-        inspect.rooms = scanned.rooms;
-        inspect.codeUsed = scanned.codeUsed;
-        inspect.cache = scanned.cache;
-      }
-
-      // Like the scan, try the 5-letter code too.
-      const aliases = [...new Set([code, ...(code.length > 5 ? [code.slice(0, 5)] : [])])];
-
-      for (const alias of aliases) {
-        if (inspect.rooms || inspect.unavailable) break;
-
-        const cache = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-        const result = await send(variables(alias, null, cache));
-
+      if (!inspect.rooms && !inspect.unavailable) {
+        const found = knownRooms(code) || await loadRoomTypes(code, send);
         if (!current()) return;
 
-        if (result.unavailable) {
-          inspect.unavailable = alias === aliases[aliases.length - 1];
-          continue;
-        }
-
-        const rooms = (result.shopAvail.roomTypes || [])
-          .filter(item => item.roomTypeCode)
-          .sort((a, b) => referencePrice(a) - referencePrice(b));
-
-        if (result.ctyhocn === code && rooms.length) {
-          inspect.rooms = rooms.slice(0, CONFIG.maxRooms);
-          inspect.codeUsed = alias;
-          inspect.cache = cache;
-        }
+        if (found) Object.assign(inspect, found);
       }
 
       if (!inspect.rooms) {
@@ -5672,8 +5770,9 @@
     };
   }
 
-  // Opens the Rate Inspector on a hotel, e.g. from Resort Finder or Cash vs. Points.
-  function openInspector(code) {
+  // Opens the Rate Inspector on a hotel, e.g. from Resort Finder or Cash vs. Points,
+  // and on one of its room types from the Suite Finder.
+  function openInspector(code, room = null) {
     if (!state.tools.rates || !state.hotels.has(code)) return;
 
     if (state.inspect.code !== code && state.inspect.status !== 'loading') {
@@ -5681,7 +5780,7 @@
     }
 
     showView('rates');
-    inspectRates(code);
+    inspectRates(code, room);
   }
 
   const inspectButton = code => state.tools.rates
@@ -5864,6 +5963,561 @@
         </div>
       </div>
     `;
+  }
+
+  // =====================================
+  // Suite Finder
+  // =====================================
+
+  // status: idle or loading; hotels: room types and points prices by hotel code, see
+  // loadSuites(); pick: the one hotel to look at, '' for the first SUITES.maxHotels.
+  function freshSuites(pick = '') {
+    return { status: 'idle', hotels: new Map(), pick, done: 0, total: 0, current: '' };
+  }
+
+  // Hotels the Suite Finder looks at: the picked one, else the first of the search.
+  function suiteHotels() {
+    const pick = state.suites.pick;
+    if (pick && state.hotels.has(pick)) return [pick];
+
+    return [...state.hotels.values()]
+      .filter(hotel => hotel.bookable !== false)
+      .slice(0, SUITES.maxHotels)
+      .map(hotel => hotel.code);
+  }
+
+  // The search's points prices show no reward rooms here, so its rooms are not asked for points.
+  const noRewards = code =>
+    wantsPoints() &&
+    state.extras.points.has(code) &&
+    !state.extras.pending &&
+    !state.extras.error &&
+    !state.hotels.get(code)?.points;
+
+  // What loadSuites() still asks for one hotel: 'rooms' (with cash prices) and 'points'.
+  function suiteNeeds(code) {
+    const data = state.suites.hotels.get(code);
+    const known = data?.rooms || data?.unavailable ? data : knownRooms(code);
+
+    if (known?.unavailable) return [];
+
+    return [
+      ...(known?.rooms ? [] : ['rooms']),
+      ...(data?.points || noRewards(code) ? [] : ['points'])
+    ];
+  }
+
+  const suiteRequests = () =>
+    suiteHotels().reduce((sum, code) => sum + suiteNeeds(code).length, 0);
+
+  // Lowest reward of a room type: { points } per night and its reward ('standard',
+  // 'premium' or null), or null.
+  function roomPoints(room) {
+    const offers = [].concat(room?.redemptionRoomRates || []).map(rate => {
+      const nights = [].concat(rate?.pointDetails || [])
+        .map(item => item?.pointsRate)
+        .filter(value => Number.isFinite(value) && value > 0);
+
+      return nights.length
+        ? {
+            points: Math.round(nights.reduce((sum, value) => sum + value, 0) / nights.length),
+            reward: rewardType(rate)
+          }
+        : null;
+    }).filter(Boolean);
+
+    return offers.sort((a, b) => a.points - b.points)[0] || null;
+  }
+
+  // Loads the room types of each hotel (unless another tool has them) and their points prices.
+  async function loadSuites() {
+    if (
+      !state.tools.suites ||
+      !state.search ||
+      state.suites.status === 'loading'
+    ) return;
+
+    const codes = suiteHotels();
+    if (!codes.length) return;
+
+    const generation = state.generation;
+    const suites = state.suites;
+
+    // Everything already loaded: ask again.
+    if (!suiteRequests()) {
+      for (const code of codes) suites.hotels.delete(code);
+    }
+
+    suites.status = 'loading';
+    suites.done = 0;
+    suites.total = suiteRequests();
+    loadCurrencies();
+    render();
+
+    const current = () =>
+      generation === state.generation && state.suites === suites;
+
+    let sent = 0;
+
+    const send = async (query, values) => {
+      if (sent++) await sleep(CONFIG.delay);
+      if (!current()) throw Error('cancelled');
+
+      const result = await ask(query, values, false);
+      suites.done++;
+
+      return result;
+    };
+
+    for (const code of codes) {
+      if (!current()) return;
+
+      const needs = suiteNeeds(code);
+      const data = suites.hotels.get(code) || {
+        rooms: null,
+        codeUsed: null,
+        cache: null,
+        unavailable: false,
+        // Lowest reward by room type code (see roomPoints()), null until loaded.
+        points: null,
+        error: '',
+        pointsError: ''
+      };
+
+      data.error = '';
+      suites.hotels.set(code, data);
+      suites.current = code;
+      render();
+
+      try {
+        if (!data.rooms && !data.unavailable) {
+          const found = knownRooms(code) || await loadRoomTypes(code, values => send(QUICK, values));
+          if (!current()) return;
+
+          if (!found) throw Error('No bookable room types found');
+          Object.assign(data, found);
+        }
+
+        if (data.rooms && needs.includes('points')) {
+          const values = variables(
+            data.codeUsed,
+            null,
+            crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
+          );
+          values.specialRates = { ...values.specialRates, hhonors: true };
+
+          try {
+            const result = await send(ROOM_POINTS, values);
+            if (!current()) return;
+
+            data.points = new Map();
+            data.pointsError = '';
+
+            for (const room of result.unavailable ? [] : result.shopAvail.roomTypes || []) {
+              const offer = roomPoints(room);
+              if (offer) data.points.set(room.roomTypeCode, offer);
+            }
+
+          } catch (error) {
+            if (!current()) return;
+
+            data.pointsError = error.message;
+          }
+        }
+
+      } catch (error) {
+        if (!current()) return;
+
+        data.error = error.message;
+      }
+    }
+
+    if (!current()) return;
+
+    suites.status = 'idle';
+    suites.current = '';
+    render();
+  }
+
+  // Kind of room by its name, or '' for a plain room.
+  function roomKind(name) {
+    if (/suite|penthouse|presidential|residence|apartment/i.test(name)) return 'Suite';
+    if (/villa|bungalow|pavilion|chalet|cabana/i.test(name)) return 'Villa';
+    if (/executive|club|lounge|ambassador/i.test(name)) return 'Club';
+    if (/view|ocean|\bsea\b|lagoon|beach|water|front|balcony|terrace/i.test(name)) return 'View';
+
+    return '';
+  }
+
+  const isSuite = room => room.kind === 'Suite' || room.kind === 'Villa';
+
+  const suiteNoun = () => state.suiteShow === 'all' ? ['upgrade', 'upgrades'] : ['suite', 'suites'];
+
+  // A nightly cash amount in the panel currency, else in the search currency.
+  function suiteMoney(amount, sign = false) {
+    const from = state.search.currency;
+    const value = convert(amount, from, state.currency);
+
+    return (value !== null && from !== state.currency ? '≈ ' : '') +
+      (sign ? '+' : '') +
+      (value === null ? money(amount, from) : money(value));
+  }
+
+  // What an upgrade costs over the cheapest room, short.
+  const upgradeCost = room =>
+    room.cashUp === null
+      ? `+${number(room.pointsUp)} pts`
+      : room.cashUp === 0
+        ? 'same price'
+        : `+${room.percent} %`;
+
+  // Why the Suite Finder can't run for this search, or ''.
+  function suiteBlocked() {
+    if (!state.search) return 'Waiting for a search';
+    if (!state.hotels.size) return 'Waiting for hotels';
+
+    return '';
+  }
+
+  // Per loaded hotel: its cheapest room and the pricier room types with their markup in
+  // cash and points, cheapest upgrade first; pending counts hotels not loaded yet.
+  function suiteTable() {
+    const s = state.search;
+    const result = { rows: [], empty: [], pending: 0, count: 0, top: null, noExtra: null };
+
+    for (const code of suiteHotels()) {
+      const data = state.suites.hotels.get(code);
+      const name = hotelName(code);
+
+      if (data?.unavailable) {
+        result.empty.push({ code, name, reason: 'Sold out' });
+        continue;
+      }
+
+      if (!data?.rooms) {
+        if (data?.error) result.empty.push({ code, name, reason: 'Failed', error: data.error });
+        else result.pending++;
+        continue;
+      }
+
+      const rooms = data.rooms.map(room => {
+        const cash = referencePrice(room);
+        const offer = data.points?.get(room.roomTypeCode);
+        const label = room.roomTypeName || room.roomTypeCode;
+
+        return {
+          code: room.roomTypeCode,
+          name: label,
+          kind: roomKind(label),
+          // Cheapest nightly rate in the search currency.
+          cash: Number.isFinite(cash) ? cash : null,
+          points: offer?.points ?? null,
+          reward: offer?.reward ?? null
+        };
+      }).filter(room => room.cash !== null || room.points !== null);
+
+      const lowest = values => values.length ? Math.min(...values) : null;
+      const lowCash = lowest(rooms.map(room => room.cash).filter(value => value !== null));
+      const lowPoints = lowest(rooms.map(room => room.points).filter(value => value !== null));
+
+      // The hotel's cheapest room in cash, else in points.
+      const base =
+        rooms.find(room => lowCash !== null && room.cash === lowCash) ||
+        rooms.find(room => room.points === lowPoints);
+
+      if (!base) {
+        result.empty.push({ code, name, reason: 'No prices' });
+        continue;
+      }
+
+      const upgrades = rooms
+        .filter(room => room !== base)
+        .map(room => {
+          const cashUp = room.cash !== null && lowCash !== null ? room.cash - lowCash : null;
+          const pointsUp = room.points !== null && lowPoints !== null ? room.points - lowPoints : null;
+          const cashEuro = cashUp > 0 ? convert(cashUp, s.currency, 'EUR') : null;
+
+          return {
+            ...room,
+            cashUp,
+            percent: cashUp !== null && lowCash ? Math.round(cashUp / lowCash * 100) : null,
+            pointsUp,
+            // The extra points at the user's point value, in the panel currency.
+            pointsValue: pointsUp > 0
+              ? convert(pointsUp * state.pointValue / 100, 'EUR', state.currency)
+              : null,
+            // Euro cents each extra point is worth when the upgrade is paid in points instead of cash.
+            centsPerPoint: cashEuro && pointsUp > 0 ? cashEuro * 100 / pointsUp : null
+          };
+        })
+        .filter(room =>
+          (room.cashUp > 0 || room.pointsUp > 0 || isSuite(room)) &&
+          (state.suiteShow === 'all' || isSuite(room))
+        )
+        .sort((a, b) =>
+          (a.cashUp ?? Infinity) - (b.cashUp ?? Infinity) ||
+          (a.pointsUp ?? Infinity) - (b.pointsUp ?? Infinity) ||
+          a.name.localeCompare(b.name)
+        );
+
+      if (!upgrades.length) {
+        result.empty.push({ code, name, reason: state.suiteShow === 'all' ? 'No upgrades' : 'No suites' });
+        continue;
+      }
+
+      result.rows.push({
+        code,
+        name,
+        data,
+        base,
+        lowCash,
+        lowPoints,
+        upgrades,
+        resort: Boolean(state.resorts?.has(code))
+      });
+    }
+
+    result.rows.sort((a, b) =>
+      (a.upgrades[0].percent ?? Infinity) - (b.upgrades[0].percent ?? Infinity) ||
+      a.name.localeCompare(b.name)
+    );
+
+    result.count = result.rows.reduce((sum, row) => sum + row.upgrades.length, 0);
+    result.top = result.rows[0] || null;
+
+    // An upgrade at no extra points although it costs more in cash.
+    for (const row of result.rows) {
+      const room = row.upgrades.find(item => item.pointsUp === 0 && item.cashUp > 0);
+
+      if (room && !result.noExtra) result.noExtra = { row, room };
+    }
+
+    return result;
+  }
+
+  function renderSuites() {
+    const root = $('hpt-suites');
+    const suites = state.suites;
+    const blocked = suiteBlocked();
+    const loading = suites.status === 'loading';
+    const options = inspectOptions();
+    const first = Math.min(
+      SUITES.maxHotels,
+      [...state.hotels.values()].filter(hotel => hotel.bookable !== false).length
+    );
+
+    $('hpt-suite-controls').hidden = Boolean(blocked);
+
+    const select = $('hpt-suite-hotel');
+    const key = `${first}|` + options.map(option => `${option.code}:${option.name}`).join(',');
+
+    if (select.dataset.key !== key) {
+      select.dataset.key = key;
+      select.innerHTML =
+        `<option value="">First ${first} ${plural(first, 'hotel', 'hotels')} of the search</option>` +
+        options.map(option =>
+          `<option value="${html(option.code)}">${html(option.name)}</option>`
+        ).join('');
+    }
+
+    if (document.activeElement !== select) {
+      select.value = state.hotels.has(suites.pick) ? suites.pick : '';
+    }
+    select.disabled = loading;
+
+    for (const button of state.panel.querySelectorAll('[data-suite-show]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.suiteShow === state.suiteShow));
+    }
+
+    if (blocked) {
+      $('hpt-suite-status').textContent = '';
+      root.innerHTML = `
+        <div class="hpt-empty">
+          <div class="hpt-empty-icon">${ICON.calendar}</div>
+          <b>${html(blocked)}</b>
+          <p>Search a destination and dates on Hilton.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const requests = suiteRequests();
+    const table = suiteTable();
+
+    $('hpt-suite-load').disabled = loading;
+    $('hpt-suite-label').textContent =
+      !requests && !table.pending ? 'Reload rooms' : 'Find suites';
+
+    if (loading) {
+      $('hpt-suite-status').innerHTML = `
+        <div class="hpt-progress">
+          <div class="hpt-row">
+            <b>Loading rooms of ${html(hotelName(suites.current))}</b>
+            <span>${Math.min(suites.done, suites.total)}/${suites.total} requests</span>
+          </div>
+          <div class="hpt-bar">
+            <div style="width:${Math.round(100 * Math.min(1, suites.done / Math.max(1, suites.total)))}%"></div>
+          </div>
+        </div>
+      `;
+      root.innerHTML = '';
+      return;
+    }
+
+    const hotels = suiteHotels().length;
+
+    if (!table.rows.length && !table.empty.length) {
+      $('hpt-suite-status').textContent = requests
+        ? `Sends ${requests} ${plural(requests, 'request', 'requests')} to Hilton ` +
+          `(room types and their points prices for ${hotels} ${plural(hotels, 'hotel', 'hotels')}), ` +
+          `about ${Math.max(1, Math.round(requests * (CONFIG.delay + 400) / 60000))} min.`
+        : 'Room types already loaded by other tools; sends no requests.';
+      root.innerHTML = '';
+      return;
+    }
+
+    const failed = suiteHotels()
+      .filter(code => suites.hotels.get(code)?.pointsError).length;
+
+    $('hpt-suite-status').textContent = [
+      failed ? `Points prices failed for ${failed} ${plural(failed, 'hotel', 'hotels')}` : '',
+      table.pending
+        ? `${table.pending} more ${plural(table.pending, 'hotel', 'hotels')}: ` +
+          `${requests} ${plural(requests, 'request', 'requests')}`
+        : ''
+    ].filter(Boolean).join(' · ');
+
+    const [one, many] = suiteNoun();
+    const { top, noExtra } = table;
+
+    const cents = room => room.centsPerPoint
+      ? `<span
+          class="hpt-chip ${room.centsPerPoint >= state.pointValue ? 'points' : 'muted'}"
+          title="Each extra point is worth ${html(room.centsPerPoint.toFixed(2))} ct when you pay this upgrade in points"
+        >${html(room.centsPerPoint.toFixed(2))} ct/pt</span>`
+      : '';
+
+    const points = (row, room) => room.pointsUp === null
+      ? (row.data.points && row.lowPoints !== null ? '<span class="hpt-chip muted">Not on points</span>' : '')
+      : room.pointsUp === 0
+        ? '<span class="hpt-chip cash">No extra points</span>'
+        : `<span>+${html(number(room.pointsUp))} pts${room.pointsValue !== null
+            ? ` (≈ ${html(money(room.pointsValue))})`
+            : ''}</span>`;
+
+    root.innerHTML = `
+      ${top ? `
+        <div class="hpt-split-stats">
+          <div class="hpt-stats">
+            <div class="hpt-stat suites">
+              <b>${html(upgradeCost(top.upgrades[0]))}</b>
+              <span>cheapest ${one}: ${html(top.upgrades[0].name)}</span>
+            </div>
+            ${noExtra ? `
+              <div class="hpt-stat good">
+                <b>0 extra pts</b>
+                <span>${html(noExtra.room.name)} at ${html(noExtra.row.name)}</span>
+              </div>
+            ` : `
+              <div class="hpt-stat">
+                <b>${table.count}</b>
+                <span>${plural(table.count, one, many)} at ${table.rows.length} ${plural(table.rows.length, 'hotel', 'hotels')}</span>
+              </div>
+            `}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="hpt-suite-list">
+        ${table.rows.map(row => {
+          const more = row.upgrades.length - SUITES.maxShown;
+          const entry = { code: row.code, codeUsed: row.data.codeUsed };
+
+          return `
+            <div class="hpt-suite-hotel">
+              <div class="hpt-row">
+                <span class="hpt-name">${html(row.name)}</span>
+                ${row.resort ? '<span class="hpt-tag">Resort Credit</span>' : ''}
+              </div>
+              <div class="hpt-suite-base">
+                Cheapest: ${html(row.base.name)} ·
+                ${html([
+                  row.lowCash !== null ? suiteMoney(row.lowCash) : '',
+                  row.lowPoints !== null ? `${number(row.lowPoints)} pts` : ''
+                ].filter(Boolean).join(' or '))} a night
+              </div>
+
+              ${row.upgrades.slice(0, SUITES.maxShown).map(room => `
+                <div class="hpt-suite-room">
+                  <div class="hpt-row">
+                    <span class="hpt-suite-name">${html(room.name)}</span>
+                    <b>${html(room.cashUp === null
+                      ? 'Points only'
+                      : room.cashUp === 0 ? 'Same price' : suiteMoney(room.cashUp, true))}</b>
+                  </div>
+                  <div class="hpt-free-sub">
+                    <span class="hpt-all-meta">
+                      ${room.kind ? `<span class="hpt-chip suites">${html(room.kind)}</span>` : ''}
+                      ${room.percent > 0 ? `<span class="hpt-rate-markup">+${room.percent} %</span>` : ''}
+                      ${points(row, room)}
+                      ${cents(room)}
+                      ${room.reward === 'standard' && isSuite(room)
+                        ? '<span class="hpt-chip free" title="Standard Room Reward: a Free Night Certificate covers it">Certificate</span>'
+                        : ''}
+                    </span>
+                    ${state.tools.rates && room.cash !== null ? `
+                      <button
+                        type="button"
+                        class="hpt-link-btn"
+                        data-inspect="${html(row.code)}"
+                        data-inspect-room="${html(room.code)}"
+                      >Rates</button>
+                    ` : ''}
+                  </div>
+                </div>
+              `).join('')}
+
+              ${more > 0 ? `<div class="hpt-suite-more">${more} more ${plural(more, one, many)} on Hilton</div>` : ''}
+
+              <div class="hpt-links">
+                <a
+                  href="${html(rateURL(entry))}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >View rooms ↗</a>
+                ${row.lowPoints !== null ? `
+                  <a
+                    href="${html(rateURL(entry, true))}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >Rooms on points ↗</a>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      ${table.empty.length ? `
+        <div class="hpt-free-title">No ${html(many)} shown</div>
+        ${table.empty.map(row => `
+          <div class="hpt-free-off">
+            <span>${html(row.name)}</span>
+            <span class="hpt-chip muted"${row.error ? ` title="${html(row.error)}"` : ''}>${html(row.reason)}</span>
+          </div>
+        `).join('')}
+      ` : ''}
+    `;
+  }
+
+  function setSuiteShow(value) {
+    state.suiteShow = value === 'all' ? 'all' : 'suites';
+
+    try {
+      localStorage.setItem(SUITES_SHOW_KEY, state.suiteShow);
+    } catch {}
+
+    render();
   }
 
   // =====================================
@@ -6517,6 +7171,18 @@
               ${ICON.chevron}
             </button>
 
+            <button class="hpt-tool" type="button" data-view="suites">
+              <span class="hpt-tool-icon suites">${ICON.suites}</span>
+              <span class="hpt-tool-text">
+                <span class="hpt-row">
+                  <b>Suite Finder</b>
+                  <span id="hpt-suites-chip" class="hpt-chip suites"></span>
+                </span>
+                <span id="hpt-suites-sub" class="hpt-tool-sub"></span>
+              </span>
+              ${ICON.chevron}
+            </button>
+
             <button class="hpt-tool" type="button" data-view="watch">
               <span class="hpt-tool-icon watch">${ICON.watch}</span>
               <span class="hpt-tool-text">
@@ -6633,6 +7299,21 @@
                   role="switch"
                   data-tool="rates"
                   aria-label="Rate Inspector"
+                >
+              </label>
+
+              <label class="hpt-toggle hpt-tool-switch">
+                <span class="hpt-tool-icon small suites">${ICON.suites}</span>
+                <span class="hpt-tool-text">
+                  <b>Suite Finder</b>
+                  <span id="hpt-suites-state"></span>
+                </span>
+                <input
+                  class="hpt-switch"
+                  type="checkbox"
+                  role="switch"
+                  data-tool="suites"
+                  aria-label="Suite Finder"
                 >
               </label>
 
@@ -6894,6 +7575,43 @@
           </div>
         </div>
 
+        <div id="hpt-view-suites" hidden>
+          <div id="hpt-suite-controls" class="hpt-controls">
+            <div class="hpt-free-intro">
+              Suites and upgrades of each hotel with what they cost over its cheapest room,
+              in cash and in points.
+            </div>
+
+            <label class="hpt-settings hpt-rate-pick">
+              <span>Hotels</span>
+              <select id="hpt-suite-hotel" aria-label="Hotels to look at"></select>
+            </label>
+
+            <div class="hpt-split-pick">
+              <div class="hpt-seg" role="group" aria-label="Room types to show">
+                <button type="button" data-suite-show="suites" aria-pressed="true">Suites</button>
+                <button type="button" data-suite-show="all" aria-pressed="false">All upgrades</button>
+              </div>
+
+              <button id="hpt-suite-load" class="hpt-primary" type="button">
+                ${ICON.refresh}
+                <span id="hpt-suite-label" class="hpt-idle">Find suites</span>
+                <span class="hpt-busy">Loading…</span>
+              </button>
+            </div>
+
+            <div id="hpt-suite-status" class="hpt-hint"></div>
+          </div>
+
+          <div id="hpt-suites"></div>
+
+          <div class="hpt-footer">
+            Prices are the cheapest nightly rate of each room type and its lowest reward per night,
+            compared with the hotel's cheapest room. <b>ct/pt</b> is what each extra point is worth
+            when you pay the upgrade in points instead of cash; blue means more than your point value.
+          </div>
+        </div>
+
         <div id="hpt-view-watch" hidden>
           <div class="hpt-controls">
             <div class="hpt-free-intro">
@@ -6966,8 +7684,11 @@
       const mode = event.target.closest('[data-cal-mode]')?.dataset.calMode;
       if (mode) setCalendarMode(mode);
 
-      const inspect = event.target.closest('[data-inspect]')?.dataset.inspect;
-      if (inspect) openInspector(inspect);
+      const show = event.target.closest('[data-suite-show]')?.dataset.suiteShow;
+      if (show) setSuiteShow(show);
+
+      const inspect = event.target.closest('[data-inspect]');
+      if (inspect) openInspector(inspect.dataset.inspect, inspect.dataset.inspectRoom || null);
 
       const watch = event.target.closest('[data-watch]')?.dataset.watch;
       if (watch) watchRate(watch);
@@ -6987,6 +7708,11 @@
     $('hpt-cal-range').onchange = event => setCalendarRange(event.target.value);
 
     $('hpt-rate-load').onclick = () => inspectRates();
+    $('hpt-suite-load').onclick = loadSuites;
+    $('hpt-suite-hotel').onchange = event => {
+      state.suites.pick = event.target.value;
+      render();
+    };
     $('hpt-watch-check').onclick = () => checkWatch(true);
     $('hpt-rate-hotel').onchange = event => {
       state.inspect = freshInspect(event.target.value);

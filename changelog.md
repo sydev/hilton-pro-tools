@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+
+- **Suite Finder:** an eighth tool that shows which suites and upgrades the hotels of your search have and what they cost over each hotel's cheapest room: in cash per night and in percent, in points per night with what those points are worth at your point value, and what each extra point is worth when you pay the upgrade in points (*ct/pt*). *No extra points* marks a suite that costs as many points as the cheapest room, *Certificate* one a Free Night Certificate covers.
+- **Find suites:** loads the first 10 hotels of the search or one hotel you pick, with one request for the room types and one for their points prices per hotel (the page says how many before you start). Room types Resort Finder or the Rate Inspector already loaded need no request.
+- **Suites or all upgrades:** switches between suites and villas and every pricier room type, without new requests (saved). **Rates** next to a suite opens the Rate Inspector on that room type.
+- **Suite Finder card and switch:** the home card shows how many suites were found and the best one; Settings has its on/off switch. It sends nothing until you click **Find suites**.
+
 ## 0.9.0
 
 ### Added
